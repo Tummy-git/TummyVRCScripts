@@ -22,12 +22,20 @@ fi
 echo "Activating environment..."
 source "$VENV_DIR/bin/activate"
 
-# Check if the package is installed
+# Check if the vrchatapi is installed
 if ! pip show vrchatapi > /dev/null 2>&1; then
     echo "vrchatapi not found. Installing..."
     python3 -m pip install vrchatapi
 else
     echo "vrchatapi is already installed."
+fi
+
+# Check if the icalendar is installed
+if ! pip show icalendar > /dev/null 2>&1; then
+    echo "icalendar not found. Installing..."
+    python3 -m pip install icalendar
+else
+    echo "icalendar is already installed."
 fi
 
 # 3. Run the script

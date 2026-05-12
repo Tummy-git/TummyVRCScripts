@@ -41,7 +41,7 @@ goto#?, empty to advance, or 'update/clear/add/remove/fav':
 |-----------|---------------------|----------------------------|
 |"cookie_path"| "nope/cookie.json"|Where the cookie is stored
 |"cred_path"| "nope/cred.json"|Where saved credentials is stored
-|"cookie_lifetime_days"| 7|Cookie lifetime
+|"cookie_lifetime_days"| 7|Cookie lifetime. Type `null` to make it endless.
 |"co_explorers_path"| "worldhoppers.json"|Stores what friends gets invited
 |"world_list_path"| "worlds_output.json"|The API response with worlds
 |"manual_world_list"| "world_ids.txt"|Where you add a list manually

@@ -4,6 +4,7 @@ import getpass
 import importlib
 import base64
 import time
+import argparse  # <--- Added for command-line arguments
 from http.cookiejar import Cookie
 
 import vrchatapi
@@ -19,7 +20,6 @@ def patched_name_setter(self, name):
     self._name = name
 
 def patched_favorites_setter(self, favorites):
-    # Skips the >= 0 validation check
     self._favorites = favorites
 
 LimitedWorld.name = property(fget=LimitedWorld.name.fget, fset=patched_name_setter)
@@ -30,20 +30,18 @@ World.favorites = property(fget=World.favorites.fget, fset=patched_favorites_set
 REGISTERED_TOOLS = [
     {"module": "world_hopper", "name": "VRChat World Hopper"},
     {"module": "regenerate_impostors", "name": "Impostor Regenerator"},
+    {"module": "export_calendar", "name": "Export Followed Events to iCal"},
 ]
 
 def scramble(text):
-    """Obfuscates text to prevent casual reading. THIS IS NOT SECURE ENCRYPTION."""
     if not text: return ""
     return base64.b64encode(text.encode('utf-8')).decode('utf-8')
 
 def unscramble(text):
-    """Reverses the Base64 obfuscation."""
     if not text: return ""
     try:
         return base64.b64decode(text.encode('utf-8')).decode('utf-8')
     except Exception:
-        # Fallback in case the user has legacy plaintext in their settings file
         return text
 
 def make_cookie(name, value, expire_time):
@@ -54,6 +52,12 @@ def save_settings(settings_path, data):
         json.dump(data, f, indent=4)
 
 def main():
+    # --- Command Line Argument Setup ---
+    parser = argparse.ArgumentParser(description="VRChat Toolbox")
+    parser.add_argument('--run', type=str, help='Directly run a tool module by name (e.g., --run export_calendar)')
+    args = parser.parse_args()
+    is_automated = bool(args.run)
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     settings_path = os.path.join(script_dir, 'settings.json')
 
@@ -62,8 +66,13 @@ def main():
 
     cookie_file_path = settingsdata['files']['cookie_path']
     cred_file_path = settingsdata['files'].get('cred_path', 'nope/cred.json')
-    cookie_lifetime_seconds = settingsdata['files'].get('cookie_lifetime_days', 30) * 86400
-    expire_time = int(time.time()) + cookie_lifetime_seconds
+
+    lifetime_days = settingsdata['files'].get('cookie_lifetime_days', 30)
+
+    if lifetime_days is None:
+        expire_time = None
+    else:
+        expire_time = int(time.time()) + (lifetime_days * 86400)
 
     # --- Ensure Credentials File & Folder Exist ---
     cred_dir = os.path.dirname(cred_file_path)
@@ -74,7 +83,6 @@ def main():
         with open(cred_file_path, 'w') as f:
             json.dump({"username": "", "password": ""}, f, indent=4)
 
-    # Attempt to load and unscramble saved credentials from cred.json
     with open(cred_file_path, 'r') as f:
         cred_data = json.load(f)
 
@@ -84,6 +92,10 @@ def main():
     manual_login = False
 
     if not vrc_user or not vrc_pass:
+        if is_automated:
+            print("Automated Run Error: Missing credentials in cred.json. Run manually first.")
+            return
+
         print("\n--- Authentication Setup ---")
         if not vrc_user:
             vrc_user = input("Enter VRChat Username: ")
@@ -108,8 +120,12 @@ def main():
 
             try:
                 current_user = auth_api.get_current_user()
-                print(f"Logged in via cookie as: {current_user.display_name} ({current_user.id})")
+                if not is_automated:
+                    print(f"Logged in via cookie as: {current_user.display_name} ({current_user.id})")
             except UnauthorizedException:
+                if is_automated:
+                    print("Automated Run Error: Session expired. Run manually to log in again.")
+                    return
                 print("Session expired. Please log in again.")
                 os.remove(cookie_file_path)
                 return
@@ -117,6 +133,10 @@ def main():
             try:
                 current_user = auth_api.get_current_user()
             except UnauthorizedException as e:
+                if is_automated:
+                    print("Automated Run Error: 2FA required. Run manually to log in.")
+                    return
+
                 if e.status == 200:
                     if "Email" in e.reason:
                         auth_api.verify2_fa_email_code(two_factor_email_code=TwoFactorEmailCode(input("Email 2FA Code: ")))
@@ -124,10 +144,7 @@ def main():
                         auth_api.verify2_fa(two_factor_auth_code=TwoFactorAuthCode(input("2FA Code: ")))
                     current_user = auth_api.get_current_user()
 
-            # Save the new auth cookies
             cookie_jar = api_client.rest_client.cookie_jar._cookies["api.vrchat.cloud"]["/"]
-
-            # Ensure cookie folder exists before saving
             cookie_dir = os.path.dirname(cookie_file_path)
             if cookie_dir:
                 os.makedirs(cookie_dir, exist_ok=True)
@@ -136,7 +153,6 @@ def main():
                 json.dump({"auth": cookie_jar["auth"].value, "twoFactorAuth": cookie_jar["twoFactorAuth"].value}, f)
             print(f"Logged in as: {current_user.display_name} ({current_user.id})")
 
-        # --- Save Credentials Prompt ---
         if manual_login:
             save_choice = input("Do you want to save your username and password for next time? (Y/N): ").strip().lower()
             if save_choice == 'y':
@@ -145,6 +161,19 @@ def main():
                 with open(cred_file_path, 'w') as f:
                     json.dump(cred_data, f, indent=4)
                 print(f"Credentials scrambled and saved to {cred_file_path}.")
+
+        # --- Direct Run Execution (Bypasses Menu) ---
+        if is_automated:
+            target_tool = next((tool for tool in REGISTERED_TOOLS if tool['module'] == args.run), None)
+            if target_tool:
+                try:
+                    module = importlib.import_module(target_tool['module'])
+                    module.run(api_client, current_user, settingsdata)
+                except Exception as e:
+                    print(f"Failed to execute tool '{args.run}': {e}")
+            else:
+                print(f"Error: Tool '{args.run}' not found in registered tools.")
+            return # Exits the script immediately after running
 
         # --- Menu System Loop ---
         while True:
@@ -163,12 +192,8 @@ def main():
                 print("Logging out...")
                 if os.path.exists(cookie_file_path):
                     os.remove(cookie_file_path)
-
-                # Clear credentials from cred.json instead of settings.json
                 with open(cred_file_path, 'w') as f:
                     json.dump({"username": "", "password": ""}, f, indent=4)
-
-                # Clear active client cookies
                 api_client.rest_client.cookie_jar.clear()
                 print("Logged out. Credentials and cookies have been cleared from disk.")
                 break
@@ -180,14 +205,13 @@ def main():
                 print("Invalid selection. Try again.")
                 continue
 
-            # Dynamically import and run the selected script
             print(f"\nLoading module: {selected_tool['module']}...")
             try:
                 module = importlib.import_module(selected_tool['module'])
                 if hasattr(module, 'run'):
                     module.run(api_client, current_user, settingsdata)
                 else:
-                    print(f"Error: The module '{selected_tool['module']}' must have a 'run(api_client, current_user, settingsdata)' function.")
+                    print(f"Error: The module '{selected_tool['module']}' must have a 'run' function.")
             except Exception as e:
                 print(f"Failed to execute tool: {e}")
 
