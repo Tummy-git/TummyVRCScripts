@@ -49,4 +49,3 @@ python "%SCRIPT_NAME%"
 echo.
 echo ---------------------------------
 echo Script finished.
-pause

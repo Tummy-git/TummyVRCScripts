@@ -3,5 +3,6 @@ calendars_output.json
 calendars_output.ics
 cookie.json
 __pycache__/
+.idea
 worldhoppers.json
 cred.json
