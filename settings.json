@@ -11,6 +11,6 @@
     },
     "currentworld": "",
     "instanceid": "SpeedHopping",
-    "allowvrcx":true,
+    "allowvrcx":false,
     "vrcxfavgroup": "Favorites"
 }
