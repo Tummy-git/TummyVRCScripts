@@ -1,0 +1,16 @@
+{
+    "files": {
+        "cookie_path": "nope/cookie.json",
+        "cred_path": "nope/cred.json",
+        "cookie_lifetime_days": 7,
+        "co_explorers_path": "worldhoppers.json",
+        "world_list_path": "worlds_output.json",
+        "manual_world_list": "world_ids.txt",
+        "api_delay_seconds": 30,
+        "vrcx_db_path": "~/AppData/Roaming/VRCX/VRCX.sqlite3"
+    },
+    "currentworld": "",
+    "instanceid": "SpeedHopping",
+    "allowvrcx":true,
+    "vrcxfavgroup": "Favorites"
+}
