@@ -8,6 +8,7 @@ You need at least Python 3.9 or something. Haven't checked properly. But everyth
 Download the project. And run `run.bat` or `run,sh`. This will set up a virtual environment and install the packages needed in there.
 You will be prompted to login. and if you want to save your credentials.
 >If you store your credentials. They will be stored in a file on your disk. Just make sure no one gets that file. It will list where it is located.
+
 If you  do some tweaks, you can skip the first options menu by calling `--run module_name`. Which makes it handy to run on a server. Only really usable by the ICAL export right now. But it allows you to hook it up in cron like this. `0 3 * * * /usr/bin/python3 /path/to/your/script/folder/main.py --run export_calendar >> /path/to/your/script/folder/cron.log 2>&1` If you want later you can just export the ical on a web server so your google calendar or wahtever can subscribe to it. 
 
 ### Impostor Regenerator
@@ -52,7 +53,7 @@ goto#?, empty to advance, or 'update/clear/add/remove/fav':
 |"api_delay_seconds"| 30|Some time to led realtime servers cool off.
 |"vrcx_db_path"| "~/AppData/Roaming/VRCX/VRCX.sqlite3"|Check VRCX settings below
 |"currentworld"| ""|Current world.
-|"instanceid"| "SpeedHopping"
+|"instanceid"| "SpeedHopping"|What will the instance ID be?
 |"allowvrcx"|false|Can the script interface with vrcx
 |"vrcxfavgroup"| "Favorites"|Name of a local VRCX world favorite list.
 |"calendar_json_path"| "calendars_output.json"|Output path for raw calendar file.
