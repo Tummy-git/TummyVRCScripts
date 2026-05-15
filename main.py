@@ -142,16 +142,28 @@ def main():
                         auth_api.verify2_fa_email_code(two_factor_email_code=TwoFactorEmailCode(input("Email 2FA Code: ")))
                     else:
                         auth_api.verify2_fa(two_factor_auth_code=TwoFactorAuthCode(input("2FA Code: ")))
+
+                    # Force a refresh to guarantee session updates and cookies are populated
                     current_user = auth_api.get_current_user()
+                else:
+                    print(f"Login failed: {e.reason}")
+                    return
 
-            cookie_jar = api_client.rest_client.cookie_jar._cookies["api.vrchat.cloud"]["/"]
-            cookie_dir = os.path.dirname(cookie_file_path)
-            if cookie_dir:
-                os.makedirs(cookie_dir, exist_ok=True)
+            # Safely navigate the cookies dictionary using defensive .get() calls
+            vrc_cookies = api_client.rest_client.cookie_jar._cookies.get("api.vrchat.cloud", {}).get("/", {})
+            auth_cookie = vrc_cookies.get("auth")
+            tf_cookie = vrc_cookies.get("twoFactorAuth")
 
-            with open(cookie_file_path, 'w') as f:
-                json.dump({"auth": cookie_jar["auth"].value, "twoFactorAuth": cookie_jar["twoFactorAuth"].value}, f)
-            print(f"Logged in as: {current_user.display_name} ({current_user.id})")
+            if auth_cookie and tf_cookie:
+                cookie_dir = os.path.dirname(cookie_file_path)
+                if cookie_dir:
+                    os.makedirs(cookie_dir, exist_ok=True)
+
+                with open(cookie_file_path, 'w') as f:
+                    json.dump({"auth": auth_cookie.value, "twoFactorAuth": tf_cookie.value}, f)
+                print(f"Logged in as: {current_user.display_name} ({current_user.id})")
+            else:
+                print("Warning: Logged in, but could not capture authentication cookies for caching.")
 
         if manual_login:
             save_choice = input("Do you want to save your username and password for next time? (Y/N): ").strip().lower()
