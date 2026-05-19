@@ -3,9 +3,9 @@ import json
 import time
 import datetime
 import re
+import webbrowser
 
 import vrchatapi
-
 import vrcx_utils
 from vrcx_utils import add_favorite_world
 from vrchatapi import InstanceType, InstanceRegion, CreateInstanceRequest
@@ -93,10 +93,11 @@ def display_co_explorers(explorers):
     for i, explorer in enumerate(explorers, 1):
         print(f"{i}. {explorer['name']} ({explorer['uid']})")
     print("-" * 40)
+
 def get_current_presence_world_id(api_client):
     """Fetches the ID of the world the user is currently physically standing in."""
     try:
-        api_auth = AuthenticationApi(api_client) # Note: Ensure api_client name matches your scope
+        api_auth = AuthenticationApi(api_client)
         user = api_auth.get_current_user()
         if user and user.presence and user.presence.world:
             return user.presence.world
@@ -230,6 +231,8 @@ def run(api_client, current_user, settingsdata):
         print("\n[!] Notice: VRC+ subscription not detected. Disabling custom instance names to prevent API errors.")
 
     offset = 0
+    current_instance_type = InstanceType.FRIENDS
+    action_mode = "invite"
 
     api_instance_instance = vrchatapi.InstancesApi(api_client)
     api_invite_instance = vrchatapi.InviteApi(api_client)
@@ -290,10 +293,80 @@ def run(api_client, current_user, settingsdata):
         else:
             print("\nNo preview available for next world.")
 
-        user_input = input("goto#?, empty to advance, or 'update/clear/add/remove/fav': ").strip()
+        user_input = input("goto#? (empty to advance, 'help' for options): ").strip()
+
+        # --- Fast-track commands ---
+        if user_input.lower().startswith('type '):
+            t_val = user_input.lower().split(' ', 1)[1]
+            if t_val == 'friends': current_instance_type = InstanceType.FRIENDS
+            elif t_val in ['friends+', 'hidden']: current_instance_type = InstanceType.HIDDEN
+            elif t_val in ['invite', 'invite+', 'private']: current_instance_type = InstanceType.PRIVATE
+            elif t_val == 'public': current_instance_type = InstanceType.PUBLIC
+            else:
+                print("Unknown type. Use friends, friends+, invite, or public.")
+                continue
+            print(f"Instance type set to {current_instance_type}")
+            continue
+
+        elif user_input.lower().startswith('mode '):
+            m_val = user_input.lower().split(' ', 1)[1]
+            if m_val in ['invite', 'launch', 'both']:
+                action_mode = m_val
+                print(f"Mode set to {action_mode.upper()}")
+            else:
+                print("Unknown mode. Use invite, launch, or both.")
+            continue
+
+        # --- Interactive Menus ---
+        elif user_input.lower() == 'help':
+            print("\n--- Available Commands ---")
+            print(" [empty] : Advance to the next world in the list")
+            print(" [number]: Jump to a specific world index")
+            print(" type    : Change the instance type (Friends, Friends+, etc.)")
+            print(" mode    : Toggle between API Invites and Launching the client")
+            print(" update  : Add users from your current instance to co-explorers")
+            print(" add     : Manually add a co-explorer by User ID")
+            print(" remove  : Remove a user from your co-explorers list")
+            print(" clear   : Clear your co-explorers list completely")
+            print(" fav     : Add the world you are currently in to VRCX favorites")
+            continue
+
+        elif user_input.lower() == 'type':
+            print(f"\nCurrent Type: {current_instance_type}")
+            print("1. Friends (Default)")
+            print("2. Friends+ (Hidden)")
+            print("3. Invite Only (Private)")
+            print("4. Public")
+            try:
+                t_choice = int(input("Select type (1-4, 0 to cancel): ").strip())
+                if t_choice == 1: current_instance_type = InstanceType.FRIENDS
+                elif t_choice == 2: current_instance_type = InstanceType.HIDDEN
+                elif t_choice == 3: current_instance_type = InstanceType.PRIVATE
+                elif t_choice == 4: current_instance_type = InstanceType.PUBLIC
+                if 1 <= t_choice <= 4:
+                    print(f"Instance type set to {current_instance_type}")
+            except ValueError:
+                print("Cancelled or invalid input.")
+            continue
+
+        elif user_input.lower() == 'mode':
+            print(f"\nCurrent Mode: {action_mode.upper()}")
+            print("1. Invite (Send API invites to yourself and co-explorers)")
+            print("2. Launch (Open VRChat client directly via URI)")
+            print("3. Both (Launch client AND invite co-explorers)")
+            try:
+                m_choice = int(input("Select mode (1-3, 0 to cancel): ").strip())
+                if m_choice == 1: action_mode = "invite"
+                elif m_choice == 2: action_mode = "launch"
+                elif m_choice == 3: action_mode = "both"
+                if 1 <= m_choice <= 3:
+                    print(f"Mode set to {action_mode.upper()}")
+            except ValueError:
+                print("Cancelled or invalid input.")
+            continue
 
         # --- Handle co-explorer management commands ---
-        if user_input.lower() == 'update':
+        elif user_input.lower() == 'update':
             print("Fetching users from your current instance...")
             co_explorers = handle_update_command(api_client, co_explorers, current_user.id)
             save_co_explorers(worldhoppers_file_path, co_explorers)
@@ -318,21 +391,21 @@ def run(api_client, current_user, settingsdata):
 
         elif user_input.lower() == 'fav':
             if vrcx_allowed:
-                print(f"\n[!]Adding {get_current_presence_world_id(api_client)} to {vrcx_fav_group}")
-                target_world_id = get_current_presence_world_id(api_client)
-                status = vrcx_utils.add_favorite_world(vrcx_db_path, target_world_id, vrcx_fav_group)
+                current_world_id = get_current_presence_world_id(api_client)
+                print(f"\n[!] Adding {current_world_id} to {vrcx_fav_group}")
+                status = add_favorite_world(vrcx_db_path, current_world_id, vrcx_fav_group)
                 if status == "added":
-                    print(f"\n[+] Success! Added {target_world_id} to >{vrcx_fav_group}<")
+                    print(f"\n[+] Success! Added {current_world_id} to >{vrcx_fav_group}<")
                 elif status == "duplicate":
                     print(f"\n[!] Skip: This world is already in the '{vrcx_fav_group}' group.")
                 else:
                     print(f"\n[X] Error: Could not add to database. (Check if VRCX has a heavy lock)")
             else:
-                print(f"\nVRCX interactions is set to {vrcx_allowed}. \nIf you want to do this, change from false to true in settings.json and restart the script. \nOn linux, make sure it's pointing at your vrcx database. I take no responsibility over what happens to your vrcx db. \nTake a backup. \nAlso remember that worlds doesn't show up in VRCX immedeately. But does after a restart of VRCX.")
-                
+                print(f"\nVRCX interactions is set to {vrcx_allowed}. \nIf you want to do this, change from false to true in settings.json and restart the script. \nOn linux, make sure it's pointing at your vrcx database. I take no responsibility over what happens to your vrcx db. \nTake a backup. \nAlso remember that worlds doesn't show up in VRCX immediately. But does after a restart of VRCX.")
+            continue
 
         # --- Normal navigation ---
-        if user_input == "":
+        elif user_input == "":
             if activeJumpIndex == 0 and last_index == 0 and newsession:
                 activeJumpIndex = 0
                 newsession = False
@@ -361,7 +434,7 @@ def run(api_client, current_user, settingsdata):
             instance_args = {
                 "world_id": json_list[activeJumpIndex]['id'],
                 "owner_id": current_user.id,
-                "type": InstanceType.FRIENDS,
+                "type": current_instance_type,
                 "region": InstanceRegion.EU
             }
 
@@ -379,27 +452,35 @@ def run(api_client, current_user, settingsdata):
             world_location = created.get('location') or created.get('id')
 
             print("\n-------------------------------------------------------------------------------------------------------")
-            print(f"Sent invite to #{last_index}: {world_asset_name} by {world_author_name}")
+            print(f"Sent request for #{last_index}: {world_asset_name} by {world_author_name}")
             print(f"World id: {world_location}")
             print(f"Unity version: {unity_version}")
+            print(f"Instance Type: {current_instance_type}")
             print("-------------------------------------------------------------------------------------------------------")
 
-            # Invite Logic
-            parts = world_location.split(':')
-            api_invite_instance.invite_myself_to(parts[0], parts[1] if len(parts) > 1 else "")
-            print("Invited myself.")
+            # Personal execution based on Mode
+            if action_mode == "invite":
+                parts = world_location.split(':')
+                api_invite_instance.invite_myself_to(parts[0], parts[1] if len(parts) > 1 else "")
+                print("Invited myself via API.")
+            elif action_mode in ["launch", "both"]:
+                launch_uri = f"vrchat://launch/?ref=vrchat.com&id={world_location}&attach=1"
+                print("Launching VRChat client directly...")
+                webbrowser.open(launch_uri)
 
-            # Invite all co-explorers
-            if co_explorers:
-                print(f"Inviting {len(co_explorers)} co-explorers:")
-                for explorer in co_explorers:
-                    try:
-                        api_invite_instance.invite_user(explorer['uid'], vrchatapi.InviteRequest(instance_id=world_location))
-                        print(f"  → Invited {explorer['name']}")
-                    except Exception as e:
-                        print(f"  ✗ Failed to invite {explorer['name']}: {e}")
-            else:
-                print("No co-explorers in list to invite.")
+            # Invite all co-explorers based on Mode
+            if action_mode in ["invite", "both"]:
+                if co_explorers:
+                    print(f"Inviting {len(co_explorers)} co-explorers:")
+                    for explorer in co_explorers:
+                        try:
+                            api_invite_instance.invite_user(explorer['uid'], vrchatapi.InviteRequest(instance_id=world_location))
+                            print(f"  → Invited {explorer['name']}")
+                        except Exception as e:
+                            print(f"  ✗ Failed to invite {explorer['name']}: {e}")
+                else:
+                    if action_mode == "invite":
+                        print("No co-explorers in list to invite.")
 
             lastInviteTime = int(time.time())
             print("\n")
