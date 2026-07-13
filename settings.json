@@ -6,7 +6,7 @@
         "co_explorers_path": "worldhoppers.json",
         "world_list_path": "worlds_output.json",
         "manual_world_list": "world_ids.txt",
-        "api_delay_seconds": 30,
+        "api_delay_seconds": 20,
         "vrcx_db_path": "~/AppData/Roaming/VRCX/VRCX.sqlite3",
         "calendar_json_path": "calendars_output.json",
         "calendar_ical_path": "calendars_output.ics"
@@ -14,5 +14,6 @@
     "currentworld": "",
     "instanceid": "SpeedHopping",
     "allowvrcx":false,
-    "vrcxfavgroup": "Favorites"
+    "vrcxfavgroup": "Favorites",
+    "followed_groups": []
 }

@@ -5,6 +5,7 @@ from icalendar import Calendar, Event
 
 import vrchatapi
 from vrchatapi.api.calendar_api import CalendarApi
+from vrchatapi.api.groups_api import GroupsApi
 
 def clean_for_json(obj):
     """Recursively convert model objects to JSON-serializable structures."""
@@ -98,23 +99,49 @@ def run(api_client, current_user, settingsdata):
     ical_file_output_path = os.path.join(script_dir, settingsdata['files'].get('calendar_ical_path', 'calendars_output.ics'))
 
     print("\n--- iCal Export ---")
-    print("Fetching followed calendar events...")
+    print("Fetching calendar events...")
 
     try:
         calendar_api = CalendarApi(api_client)
-        upcoming_events = calendar_api.get_followed_calendar_events()
+        all_events = []
 
-        # Clean the data to be JSON-friendly
+        # Fetch followed calendar events
+        print("  - Fetching followed calendar events...")
+        upcoming_events = calendar_api.get_followed_calendar_events()
         cleaned_events = clean_for_json(upcoming_events)
 
-        # Save the raw JSON backup just like the old script did
+        if isinstance(cleaned_events, list):
+            all_events.extend(cleaned_events)
+        else:
+            all_events.append(cleaned_events)
+
+        # Fetch group calendar events
+        followed_groups = settingsdata.get('followed_groups', [])
+        if followed_groups:
+            groups_api = GroupsApi(api_client)
+            for group_id in followed_groups:
+                try:
+                    print(f"  - Fetching events for group: {group_id}")
+                    group_events = calendar_api.get_group_calendar_events(group_id)
+                    cleaned_group_events = clean_for_json(group_events)
+
+                    if isinstance(cleaned_group_events, list):
+                        all_events.extend(cleaned_group_events)
+                    else:
+                        all_events.append(cleaned_group_events)
+                except Exception as e:
+                    print(f"  - Warning: Failed to fetch events for group {group_id}: {e}")
+        else:
+            print("  - No followed groups configured.")
+
+        # Save the raw JSON backup
         with open(calendar_json_output_path, "w", encoding="utf-8") as f:
-            json.dump(cleaned_events, f, indent=2, ensure_ascii=False)
+            json.dump(all_events, f, indent=2, ensure_ascii=False)
         print(f"Saved raw event JSON to: {calendar_json_output_path}")
 
         # Convert straight from memory without doing a redundant read from disk
         print("Converting to iCalendar format...")
-        ical_output = json_to_ical(cleaned_events)
+        ical_output = json_to_ical(all_events)
 
         if ical_output:
             # Use "wb" (write binary) to ensure CRLF line endings are preserved correctly on Windows
