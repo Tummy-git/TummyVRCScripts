@@ -93,6 +93,21 @@ def json_to_ical(events_data):
     return cal.to_ical()
 
 
+def extract_events_from_response(response):
+    """Extract event list from API response, handling wrapper objects."""
+    if isinstance(response, list):
+        return response
+    elif isinstance(response, dict):
+        # Check if this is a paginated response with 'results' key
+        if 'results' in response and isinstance(response['results'], list):
+            return response['results']
+        # Otherwise try to find any list in the dict
+        for key in response:
+            if isinstance(response[key], list):
+                return response[key]
+    return []
+
+
 def run(api_client, current_user, settingsdata):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     calendar_json_output_path = os.path.join(script_dir, settingsdata['files'].get('calendar_json_path', 'calendars_output.json'))
@@ -110,10 +125,9 @@ def run(api_client, current_user, settingsdata):
         upcoming_events = calendar_api.get_followed_calendar_events()
         cleaned_events = clean_for_json(upcoming_events)
 
-        if isinstance(cleaned_events, list):
-            all_events.extend(cleaned_events)
-        else:
-            all_events.append(cleaned_events)
+        # Extract events from response wrapper
+        events_list = extract_events_from_response(cleaned_events)
+        all_events.extend(events_list)
 
         # Fetch group calendar events
         followed_groups = settingsdata.get('followed_groups', [])
@@ -125,10 +139,9 @@ def run(api_client, current_user, settingsdata):
                     group_events = calendar_api.get_group_calendar_events(group_id)
                     cleaned_group_events = clean_for_json(group_events)
 
-                    if isinstance(cleaned_group_events, list):
-                        all_events.extend(cleaned_group_events)
-                    else:
-                        all_events.append(cleaned_group_events)
+                    # Extract events from response wrapper
+                    group_events_list = extract_events_from_response(cleaned_group_events)
+                    all_events.extend(group_events_list)
                 except Exception as e:
                     print(f"  - Warning: Failed to fetch events for group {group_id}: {e}")
         else:
