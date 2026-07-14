@@ -108,10 +108,49 @@ def extract_events_from_response(response):
     return []
 
 
+def filter_upcoming_events(events, days_ahead=None):
+    """Filter events to only include those within the next N days."""
+    if days_ahead is None or days_ahead <= 0:
+        return events
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now + datetime.timedelta(days=days_ahead)
+
+    filtered = []
+    for event in events:
+        if isinstance(event, dict):
+            start_str = event.get('starts_at')
+            if start_str:
+                try:
+                    # Parse the start time
+                    if start_str.endswith('Z'):
+                        start_str = start_str.replace('Z', '+00:00')
+                    start_time = datetime.datetime.fromisoformat(start_str)
+
+                    # Include event if it starts before the cutoff
+                    if start_time <= cutoff:
+                        filtered.append(event)
+                except ValueError:
+                    # If we can't parse the date, include it to be safe
+                    filtered.append(event)
+            else:
+                # If no start time, include it
+                filtered.append(event)
+        else:
+            filtered.append(event)
+
+    return filtered
+
+
 def run(api_client, current_user, settingsdata):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     calendar_json_output_path = os.path.join(script_dir, settingsdata['files'].get('calendar_json_path', 'calendars_output.json'))
     ical_file_output_path = os.path.join(script_dir, settingsdata['files'].get('calendar_ical_path', 'calendars_output.ics'))
+
+    # Get the days_ahead setting (default: no limit)
+    days_ahead = settingsdata.get('calendar_days_ahead', None)
+    if days_ahead is not None and days_ahead > 0:
+        print(f"Limiting calendar to events in the next {days_ahead} days.")
 
     print("\n--- iCal Export ---")
     print("Fetching calendar events...")
@@ -146,6 +185,13 @@ def run(api_client, current_user, settingsdata):
                     print(f"  - Warning: Failed to fetch events for group {group_id}: {e}")
         else:
             print("  - No followed groups configured.")
+
+        # Filter to upcoming events if setting is enabled
+        if days_ahead and days_ahead > 0:
+            initial_count = len(all_events)
+            all_events = filter_upcoming_events(all_events, days_ahead)
+            filtered_count = len(all_events)
+            print(f"Filtered {initial_count - filtered_count} past/old events.")
 
         # Save the raw JSON backup
         with open(calendar_json_output_path, "w", encoding="utf-8") as f:
