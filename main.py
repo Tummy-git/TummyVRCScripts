@@ -31,6 +31,7 @@ REGISTERED_TOOLS = [
     {"module": "world_hopper", "name": "VRChat World Hopper"},
     {"module": "regenerate_impostors", "name": "Impostor Regenerator"},
     {"module": "export_calendar", "name": "Export Followed Events to iCal"},
+    {"module": "groups_manager", "name": "Manage Followed Groups"},
 ]
 
 def scramble(text):

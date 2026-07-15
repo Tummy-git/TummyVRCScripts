@@ -7,6 +7,8 @@ import vrchatapi
 from vrchatapi.api.calendar_api import CalendarApi
 from vrchatapi.api.groups_api import GroupsApi
 
+from groups_manager import load_groups, save_groups
+
 def clean_for_json(obj):
     """Recursively convert model objects to JSON-serializable structures."""
     if hasattr(obj, "to_dict"):
@@ -168,13 +170,30 @@ def run(api_client, current_user, settingsdata):
         events_list = extract_events_from_response(cleaned_events)
         all_events.extend(events_list)
 
-        # Fetch group calendar events
-        followed_groups = settingsdata.get('followed_groups', [])
-        if followed_groups:
+        # Fetch group calendar events from groups.json
+        groups_file_path = os.path.join(script_dir, settingsdata['files'].get('groups_path', 'groups.json'))
+        groups = load_groups(groups_file_path)
+        if groups:
             groups_api = GroupsApi(api_client)
-            for group_id in followed_groups:
+            for g in groups:
+                group_id = g.get('id')
+                if not group_id:
+                    continue
+
+                # Fill missing group name if possible
+                if not g.get('name'):
+                    try:
+                        info = groups_api.get_group(group_id)
+                        name = getattr(info, 'name', None) or (info.get('name') if isinstance(info, dict) else None)
+                        if name:
+                            g['name'] = name
+                            print(f"  - Filled name for group {group_id}: {name}")
+                            save_groups(groups_file_path, groups)
+                    except Exception as e:
+                        print(f"  - Warning: Could not fetch group metadata for {group_id}: {e}")
+
                 try:
-                    print(f"  - Fetching events for group: {group_id}")
+                    print(f"  - Fetching events for group: {group_id} ({g.get('name')})")
                     group_events = calendar_api.get_group_calendar_events(group_id)
                     cleaned_group_events = clean_for_json(group_events)
 
