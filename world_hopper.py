@@ -4,6 +4,7 @@ import time
 import datetime
 import re
 import webbrowser
+import random
 
 import vrchatapi
 import vrcx_utils
@@ -24,8 +25,10 @@ def clean_for_json(obj):
     else:
         return obj
 
-def get_unity_version(created):
-    ups = (created.get('world') or {}).get('unity_packages') or []
+def get_unity_version(data):
+    # Check if 'unity_packages' is nested inside 'world' or at the root
+    world_data = data.get('world', data)
+    ups = world_data.get('unity_packages', [])
     return ups[-1].get('unity_version') if ups else 'unknown'
 
 def load_co_explorers(file_path):
@@ -247,7 +250,17 @@ def run(api_client, current_user, settingsdata):
 
     if newsession:
         api_response = []
-        if input("\nLoad worlds from IDs file? (y/n): ").lower() == "y":
+
+        print("\n--- World Queue Selection ---")
+        print("1. File (Load from manual list)")
+        print("2. Community Labs (Newest)")
+        print("3. Public (Recently Published)")
+        print("4. Public (Hot / Popular)")
+        print("5. Public (Random / Shuffle)")
+
+        q_choice = input("Select a queue to load (1-5): ").strip()
+
+        if q_choice == '1':
             if os.path.exists(manual_world_list_path):
                 with open(manual_world_list_path, 'r') as f:
                     ids = [line.strip() for line in f if line.strip()]
@@ -267,10 +280,22 @@ def run(api_client, current_user, settingsdata):
         if use_api_search:
             offset_input = input("Enter offset (0-999): ").strip()
             offset = int(offset_input) if offset_input.isdigit() else 0
-            if input("Load old worlds (Ascending)? (y/n): ").lower() == "y":
-                api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().CREATED, n=100, offset=offset, order=vrchatapi.OrderOption().ASCENDING)
-            else:
-                api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+
+            try:
+                print("Fetching world list from API...")
+                if q_choice == '2':
+                    api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                elif q_choice == '3':
+                    api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().PUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                elif q_choice == '4':
+                    api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().HEAT, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                elif q_choice == '5':
+                    api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().SHUFFLE, n=100, offset=offset)
+                else:
+                    print("Invalid selection. Defaulting to Community Labs.")
+                    api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+            except ApiException as e:
+                print(f"Error fetching queue: {e}")
 
         with open(world_json_output_path, "w", encoding="utf-8") as f:
             json.dump(clean_for_json(api_response), f, indent=2, ensure_ascii=False)
@@ -322,7 +347,7 @@ def run(api_client, current_user, settingsdata):
             print("\n--- Available Commands ---")
             print(" [empty] : Advance to the next world in the list")
             print(" [number]: Jump to a specific world index")
-            print(" type    : Change the instance type (Friends, Friends+, etc.)")
+            print(" type    : Change the instance type (Friends, Friends+, Public, etc.)")
             print(" mode    : Toggle between API Invites and Launching the client")
             print(" update  : Add users from your current instance to co-explorers")
             print(" add     : Manually add a co-explorer by User ID")
@@ -428,31 +453,75 @@ def run(api_client, current_user, settingsdata):
             time.sleep(to_sleep)
 
         last_index = activeJumpIndex
+        target_world_id = json_list[activeJumpIndex]['id']
 
         try:
-            # Build the request arguments dynamically to avoid sending empty parameters
-            instance_args = {
-                "world_id": json_list[activeJumpIndex]['id'],
-                "owner_id": current_user.id,
-                "type": current_instance_type,
-                "region": InstanceRegion.EU
-            }
+            joined_existing = False
+            world_asset_name = "Unknown World"
+            world_author_name = "Unknown"
+            world_location = ""
+            unity_version = "unknown"
 
-            # Only append the display_name parameter if they have VRC+ and actually set a name
-            if has_vrcplus and instance_name:
-                instance_args["display_name"] = instance_name
+            # --- Public Instance Logic ---
+            if current_instance_type == InstanceType.PUBLIC:
+                try:
+                    print("Checking for existing public instances...")
+                    world_info = api_world_instance.get_world(target_world_id)
+                    world_asset_name = world_info.name
+                    world_author_name = world_info.author_name
+                    unity_version = get_unity_version(clean_for_json(world_info))
 
-            created_instance = api_instance_instance.create_instance(
-                create_instance_request=CreateInstanceRequest(**instance_args)
-            )
-            created = clean_for_json(created_instance)
-            unity_version = get_unity_version(created)
-            world_asset_name = (created.get('world') or {}).get('name', 'Unknown World')
-            world_author_name = (created.get('world') or {}).get('author_name')
-            world_location = created.get('location') or created.get('id')
+                    capacity = getattr(world_info, 'capacity', 16)
+
+                    if hasattr(world_info, 'instances') and world_info.instances:
+                        best_instance_id = None
+                        for inst in world_info.instances:
+                            if len(inst) >= 2 and inst[1] < capacity:
+                                best_instance_id = inst[0]
+                                break
+
+                        if not best_instance_id:
+                            best_instance_id = world_info.instances[0][0]
+
+                        world_location = f"{world_info.id}:{best_instance_id}"
+                        joined_existing = True
+                        print("[+] Found and selected an active public instance.")
+                    else:
+                        print("[-] No active public instances found. Generating a new public instance.")
+                        # Nonce bypass: dynamically generate an instance tag without asking the API to create it
+                        nonce = random.randint(10000, 99999)
+                        world_location = f"{world_info.id}:{nonce}~region(eu)"
+                        joined_existing = True
+                except ApiException as e:
+                    print(f"Failed to check for public instances: {e}")
+
+            # --- Standard Instance Creation Logic (Friends, Private, etc.) ---
+            if not joined_existing:
+                instance_args = {
+                    "world_id": target_world_id,
+                    "type": current_instance_type,
+                    "region": InstanceRegion.EU
+                }
+
+                # Only assign an owner if it's NOT a public instance
+                if current_instance_type != InstanceType.PUBLIC:
+                    instance_args["owner_id"] = current_user.id
+
+                # Only append the display_name parameter if they have VRC+ AND the instance isn't public
+                if has_vrcplus and instance_name and current_instance_type != InstanceType.PUBLIC:
+                    instance_args["display_name"] = instance_name
+
+                created_instance = api_instance_instance.create_instance(
+                    create_instance_request=CreateInstanceRequest(**instance_args)
+                )
+                created = clean_for_json(created_instance)
+                unity_version = get_unity_version(created)
+                world_asset_name = (created.get('world') or {}).get('name', 'Unknown World')
+                world_author_name = (created.get('world') or {}).get('author_name')
+                world_location = created.get('location') or created.get('id')
 
             print("\n-------------------------------------------------------------------------------------------------------")
-            print(f"Sent request for #{last_index}: {world_asset_name} by {world_author_name}")
+            print(f"Targeting #{last_index}: {world_asset_name} by {world_author_name}")
             print(f"World id: {world_location}")
             print(f"Unity version: {unity_version}")
             print(f"Instance Type: {current_instance_type}")
