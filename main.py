@@ -38,6 +38,7 @@ REGISTERED_TOOLS = [
     {"module": "regenerate_impostors", "name": "Impostor Regenerator"},
     {"module": "export_calendar", "name": "Export Followed Events to iCal"},
     {"module": "groups_manager", "name": "Manage Followed Groups"},
+    {"module": "world_visit_tracker", "name": "World Visit Tracker"},
 ]
 
 def scramble(text):
