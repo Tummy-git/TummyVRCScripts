@@ -13,7 +13,6 @@ if [ ! -d "$VENV_DIR" ]; then
     
     if [ $? -ne 0 ]; then
         echo "Error: Failed to create virtual environment."
-        read -p "Press enter to exit..."
         exit 1
     fi
 fi
@@ -32,13 +31,12 @@ for pkg in vrchatapi icalendar rich; do
     fi
 done
 
-# 3. Run the script
+# 3. Run the script, forwarding any arguments (like --run)
 echo ""
 echo "Starting VRChat Toolbox..."
 echo "---------------------------------"
-python3 "$SCRIPT_NAME"
+python3 "$SCRIPT_NAME" "$@"
 
-# Keep window open if the script crashes or finishes
 echo ""
 echo "---------------------------------"
 echo "Script finished."
