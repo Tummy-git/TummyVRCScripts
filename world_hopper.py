@@ -13,6 +13,13 @@ from vrchatapi import InstanceType, InstanceRegion, CreateInstanceRequest
 from vrchatapi.rest import ApiException
 from vrchatapi.api import AuthenticationApi
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.progress import Progress, BarColumn, TextColumn
+
+console = Console()
+
 def clean_for_json(obj):
     if hasattr(obj, "to_dict"):
         return clean_for_json(obj.to_dict())
@@ -26,13 +33,11 @@ def clean_for_json(obj):
         return obj
 
 def get_unity_version(data):
-    # Check if 'unity_packages' is nested inside 'world' or at the root
     world_data = data.get('world', data)
     ups = world_data.get('unity_packages', [])
     return ups[-1].get('unity_version') if ups else 'unknown'
 
 def load_co_explorers(file_path):
-    """Load co-explorers from JSON file. Returns list of dicts with 'uid' and 'name'."""
     if not os.path.exists(file_path):
         return []
     try:
@@ -43,181 +48,93 @@ def load_co_explorers(file_path):
         return []
 
 def save_co_explorers(file_path, explorers):
-    """Save co-explorers to JSON file."""
-    # Ensure directory exists
     dir_path = os.path.dirname(file_path)
     if dir_path and not os.path.exists(dir_path):
         os.makedirs(dir_path, exist_ok=True)
-
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(explorers, f, indent=2, ensure_ascii=False)
-    print(f"Co-explorers list saved. Total: {len(explorers)}")
 
 def get_instance_users(api_client, world_id, instance_id):
-    """Fetch users currently in the specified instance."""
     try:
         api_instance = vrchatapi.InstancesApi(api_client)
         instance = api_instance.get_instance(world_id, instance_id)
-
         if not hasattr(instance, 'users') or instance.users is None:
-            print("No users data available for this instance (you may not own it)")
             return []
-
-        users_list = []
-        for user in instance.users:
-            users_list.append({
-                'uid': user.id,
-                'name': user.display_name
-            })
-        return users_list
-    except ApiException as e:
-        print(f"Error fetching instance users: {e}")
+        return [{'uid': user.id, 'name': user.display_name} for user in instance.users]
+    except ApiException:
         return []
 
 def get_user_by_id(api_client, user_id):
-    """Fetch user information by ID."""
     try:
         api_users = vrchatapi.UsersApi(api_client)
         user = api_users.get_user(user_id)
-        return {
-            'uid': user.id,
-            'name': user.display_name
-        }
-    except ApiException as e:
-        print(f"Error fetching user: {e}")
+        return {'uid': user.id, 'name': user.display_name}
+    except ApiException:
         return None
 
-def display_co_explorers(explorers):
-    """Display current co-explorers list nicely."""
-    if not explorers:
-        print("No co-explorers in list.")
-        return
-    print("\n--- Current Co-Explorers List ---")
-    for i, explorer in enumerate(explorers, 1):
-        print(f"{i}. {explorer['name']} ({explorer['uid']})")
-    print("-" * 40)
-
 def get_current_presence_world_id(api_client):
-    """Fetches the ID of the world the user is currently physically standing in."""
     try:
         api_auth = AuthenticationApi(api_client)
         user = api_auth.get_current_user()
         if user and user.presence and user.presence.world:
             return user.presence.world
         return None
-    except Exception as e:
-        print(f"Could not fetch presence: {e}")
+    except Exception:
         return None
 
-def handle_update_command(api_client, explorers, current_user_id):
-    """Update list with users from current instance."""
-    try:
-        api_auth = AuthenticationApi(api_client)
-        current_user = api_auth.get_current_user()
+def render_dashboard(active_idx, total_worlds, current_world_info, next_worlds, settings, co_explorers):
+    term_height = console.size.height
 
-        # Get world and instance from presence
-        presence = getattr(current_user, 'presence', None)
-        if not presence:
-            print("No presence data available.")
-            return explorers
-
-        world_id = getattr(presence, 'world', None)
-        instance_id = getattr(presence, 'instance', None)
-
-        if not world_id or not instance_id:
-            print(f"You are not in a valid world instance. world={world_id}, instance={instance_id}")
-            return explorers
-
-        instance_users = get_instance_users(api_client, world_id, instance_id)
-
-        if not instance_users:
-            print("No users found in your current instance.")
-            return explorers
-
-        # Filter out yourself from the list
-        instance_users = [user for user in instance_users if user['uid'] != current_user_id]
-
-        # Replace the list with instance users
-        explorers = instance_users
-        print(f"\nUpdated co-explorers list with {len(explorers)} users from your current instance:")
-        display_co_explorers(explorers)
-    except Exception as e:
-        print(f"Error updating co-explorers: {e}")
-        import traceback
-        traceback.print_exc()
-
-    return explorers
-
-def handle_add_command(api_client, explorers):
-    """Add a user to the co-explorers list."""
-    user_input = input("Enter user ID (or 'cancel' to abort): ").strip()
-
-    if user_input.lower() == 'cancel':
-        print("Add cancelled.")
-        return explorers
-
-    # Validate user ID format
-    if not re.match(r"^usr_[0-9a-fA-F-]{36}$", user_input):
-        print("Invalid user ID format. Expected format: usr_xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
-        return explorers
-
-    # Check if already in list
-    if any(explorer['uid'] == user_input for explorer in explorers):
-        print("User already in co-explorers list.")
-        return explorers
-
-    # Fetch user info
-    user_info = get_user_by_id(api_client, user_input)
-    if not user_info:
-        print("User not found or error fetching user data.")
-        return explorers
-
-    explorers.append(user_info)
-    print(f"Added {user_info['name']} ({user_info['uid']}) to co-explorers list.")
-    display_co_explorers(explorers)
-    return explorers
-
-def handle_remove_command(explorers):
-    """Remove a user from the co-explorers list."""
-    if not explorers:
-        print("No co-explorers to remove.")
-        return explorers
-
-    display_co_explorers(explorers)
-
-    try:
-        remove_index = int(input("Enter number to remove (or 0 to cancel): ").strip()) - 1
-
-        if remove_index == -1:
-            print("Remove cancelled.")
-            return explorers
-
-        if not (0 <= remove_index < len(explorers)):
-            print("Invalid selection.")
-            return explorers
-
-        removed_user = explorers.pop(remove_index)
-        print(f"Removed {removed_user['name']} from co-explorers list.")
-        display_co_explorers(explorers)
-    except ValueError:
-        print("Invalid input.")
-
-    return explorers
-
-def handle_clear_command():
-    """Clear the co-explorers list."""
-    confirm = input("Are you sure you want to clear the co-explorers list? (y/n): ").lower()
-    if confirm == 'y':
-        print("Co-explorers list cleared.")
-        return []
+    if current_world_info:
+        header_text = f"[bold green]{current_world_info.get('name', 'Unknown')}[/bold green] by [bold cyan]{current_world_info.get('author', 'Unknown')}[/bold cyan]\n"
+        header_text += f"ID: {current_world_info.get('id', 'Unknown')}\n"
+        header_text += f"Unity: {current_world_info.get('unity', 'Unknown')}"
     else:
-        print("Clear cancelled.")
-        return None
+        header_text = "No active world selected yet."
+    header_panel = Panel(header_text, title="Current World Info", border_style="red", height=6)
+
+    progress = Progress(TextColumn("[progress.description]{task.description}"), BarColumn(), TextColumn("[progress.percentage]{task.percentage:>3.0f}%"))
+    progress.add_task("Queue", total=total_worlds, completed=active_idx + 1)
+    progress_panel = Panel(progress, border_style="none", height=3)
+
+    bottom_height = max(10, term_height - 12)
+
+    next_table = Table(show_header=False, box=None)
+    for i, w in enumerate(next_worlds):
+        next_table.add_row(f"{active_idx + 2 + i}.", f"{w.get('name')} (by {w.get('author_name')})")
+    next_panel = Panel(next_table, title="Coming Next", border_style="blue", height=bottom_height)
+
+    settings_text = f"Instance Type: [bold]{settings['instance_type']}[/bold]\nLaunch Mode: [bold]{settings['launch_mode'].upper()}[/bold]"
+    settings_panel = Panel(settings_text, title="Settings", border_style="yellow", height=6)
+
+    party_table = Table(show_header=False, box=None)
+    for i, explorer in enumerate(co_explorers[:5]):
+        party_table.add_row(str(i+1), explorer['name'])
+    if len(co_explorers) > 5:
+        party_table.add_row("", f"...and {len(co_explorers) - 5} more")
+    party_panel = Panel(party_table, title="Hopping Party", border_style="white", height=bottom_height - 6)
+
+    sidebar_grid = Table.grid(expand=True)
+    sidebar_grid.add_column()
+    sidebar_grid.add_row(settings_panel)
+    sidebar_grid.add_row(party_panel)
+
+    bottom_grid = Table.grid(expand=True)
+    bottom_grid.add_column(ratio=1)
+    bottom_grid.add_column(ratio=1)
+    bottom_grid.add_row(next_panel, sidebar_grid)
+
+    main_grid = Table.grid(expand=True)
+    main_grid.add_column()
+    main_grid.add_row(header_panel)
+    main_grid.add_row(progress_panel)
+    main_grid.add_row(bottom_grid)
+
+    console.clear()
+    console.print(main_grid)
 
 def run(api_client, current_user, settingsdata):
     script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # Extract settings specific to this script
     world_json_output_path = settingsdata['files']['world_list_path']
     worldhoppers_file_path = settingsdata['files']['co_explorers_path']
     apiHappyTime = settingsdata['files']['api_delay_seconds']
@@ -228,10 +145,7 @@ def run(api_client, current_user, settingsdata):
     vrcx_allowed = settingsdata['allowvrcx']
     vrcx_fav_group = settingsdata['vrcxfavgroup']
 
-    # --- Verify VRC+ Status ---
     has_vrcplus = hasattr(current_user, 'tags') and current_user.tags and 'system_supporter' in current_user.tags
-    if not has_vrcplus and instance_name:
-        print("\n[!] Notice: VRC+ subscription not detected. Disabling custom instance names to prevent API errors.")
 
     offset = 0
     current_instance_type = InstanceType.FRIENDS
@@ -241,195 +155,169 @@ def run(api_client, current_user, settingsdata):
     api_invite_instance = vrchatapi.InviteApi(api_client)
     api_world_instance = vrchatapi.WorldsApi(api_client)
 
-    # --- Mode Selection & World Loading ---
     newsession = True
     if current_world:
-        print(f"\nYou already have an ongoing jump session stored with number {current_world}.")
-        if input("Do you want to continue last session? (y/n): ").lower() == "y":
+        console.print(f"\n[bold yellow]You have an ongoing jump session stored (Index: {current_world}).[/bold yellow]")
+        if console.input("Continue last session? (y/n): ").strip().lower() == "y":
             newsession = False
 
     if newsession:
         api_response = []
+        queue_table = Table(title="World Queue Selection", show_lines=True)
+        queue_table.add_column("Option", justify="center", style="cyan")
+        queue_table.add_column("Queue Type")
+        queue_table.add_row("1", "File (Load from manual list)")
+        queue_table.add_row("2", "Community Labs (Newest)")
+        queue_table.add_row("3", "Public (Recently Published)")
+        queue_table.add_row("4", "Public (Hot / Popular)")
+        queue_table.add_row("5", "Public (Random / Shuffle)")
 
-        print("\n--- World Queue Selection ---")
-        print("1. File (Load from manual list)")
-        print("2. Community Labs (Newest)")
-        print("3. Public (Recently Published)")
-        print("4. Public (Hot / Popular)")
-        print("5. Public (Random / Shuffle)")
-
-        q_choice = input("Select a queue to load (1-5): ").strip()
+        console.print(queue_table)
+        q_choice = console.input("Select a queue to load (1-5): ").strip()
 
         if q_choice == '1':
             if os.path.exists(manual_world_list_path):
                 with open(manual_world_list_path, 'r') as f:
                     ids = [line.strip() for line in f if line.strip()]
-                print(f"Found {len(ids)} IDs. Fetching world data...")
+                console.print(f"Found {len(ids)} IDs. Fetching data...")
                 for i, wid in enumerate(ids):
                     try:
                         w_data = api_world_instance.get_world(wid)
                         api_response.append(w_data)
-                        print(f"[{i+1}/{len(ids)}] Fetched: {w_data.name}")
                         time.sleep(0.5)
                     except ApiException:
-                        print(f"Error fetching ID {wid}")
+                        pass
             use_api_search = False if api_response else True
         else:
             use_api_search = True
 
         if use_api_search:
-            offset_input = input("Enter offset (0-999): ").strip()
+            offset_input = console.input("Enter offset (0-999): ").strip()
             offset = int(offset_input) if offset_input.isdigit() else 0
 
-            try:
-                print("Fetching world list from API...")
-                if q_choice == '2':
-                    api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
-                elif q_choice == '3':
-                    api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().PUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
-                elif q_choice == '4':
-                    api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().HEAT, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
-                elif q_choice == '5':
-                    api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().SHUFFLE, n=100, offset=offset)
-                else:
-                    print("Invalid selection. Defaulting to Community Labs.")
-                    api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
-            except ApiException as e:
-                print(f"Error fetching queue: {e}")
+            with console.status("[bold green]Fetching world list from API..."):
+                try:
+                    if q_choice == '2': api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                    elif q_choice == '3': api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().PUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                    elif q_choice == '4': api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().HEAT, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                    elif q_choice == '5': api_response = api_world_instance.search_worlds(release_status="public", sort=vrchatapi.SortOption().SHUFFLE, n=100, offset=offset)
+                    else: api_response = api_world_instance.search_worlds(sort=vrchatapi.SortOption().LABSPUBLICATIONDATE, n=100, offset=offset, order=vrchatapi.OrderOption().DESCENDING)
+                except ApiException as e:
+                    console.print(f"[red]Error fetching queue: {e}[/red]")
 
         with open(world_json_output_path, "w", encoding="utf-8") as f:
             json.dump(clean_for_json(api_response), f, indent=2, ensure_ascii=False)
 
-    # --- Load co-explorers from JSON ---
     co_explorers = load_co_explorers(worldhoppers_file_path)
 
-    # --- JUMPING LOOP ---
     with open(world_json_output_path, 'r', encoding='utf-8') as f:
         json_list = json.load(f)
 
     lastInviteTime = 0
     activeJumpIndex = int(current_world) if current_world != "" else 0
     last_index = activeJumpIndex
+    status_msg = ""
+    current_world_info = {}
 
     while True:
-        next_preview_idx = activeJumpIndex + 1
-        if 0 <= next_preview_idx < len(json_list):
-            print(f"\nNext world will be: {json_list[next_preview_idx]['name']} by {json_list[next_preview_idx]['author_name']}")
-        else:
-            print("\nNo preview available for next world.")
+        if 0 <= activeJumpIndex < len(json_list):
+            cw_static = json_list[activeJumpIndex]
+            if not current_world_info or current_world_info.get('id') != cw_static.get('id'):
+                current_world_info = {
+                    'name': cw_static.get('name', 'Unknown'),
+                    'author': cw_static.get('author_name', 'Unknown'),
+                    'id': cw_static.get('id', 'Unknown'),
+                    'unity': get_unity_version(cw_static)
+                }
 
-        user_input = input("goto#? (empty to advance, 'help' for options): ").strip()
+        next_worlds = json_list[activeJumpIndex + 1 : activeJumpIndex + 6]
+        settings_info = {'instance_type': str(current_instance_type), 'launch_mode': action_mode}
 
-        # --- Fast-track commands ---
-        if user_input.lower().startswith('type '):
-            t_val = user_input.lower().split(' ', 1)[1]
-            if t_val == 'friends': current_instance_type = InstanceType.FRIENDS
-            elif t_val in ['friends+', 'hidden']: current_instance_type = InstanceType.HIDDEN
-            elif t_val in ['invite', 'invite+', 'private']: current_instance_type = InstanceType.PRIVATE
-            elif t_val == 'public': current_instance_type = InstanceType.PUBLIC
-            else:
-                print("Unknown type. Use friends, friends+, invite, or public.")
-                continue
-            print(f"Instance type set to {current_instance_type}")
+        render_dashboard(activeJumpIndex, len(json_list), current_world_info, next_worlds, settings_info, co_explorers)
+
+        display_status = status_msg if status_msg else "Ready."
+        console.print(f"[bold]System:[/bold] {display_status}")
+        status_msg = ""
+
+        user_input = console.input("[bold]Command[/bold] (goto#, type, mode, update, add, remove, clear, fav, help): ").strip()
+
+        if user_input.lower() == 'help':
+            status_msg = "[empty]: Next world | [number]: Jump to index | type/mode: Settings | update/add/remove/clear: Party Mgmt | fav: Add to VRCX"
             continue
 
-        elif user_input.lower().startswith('mode '):
-            m_val = user_input.lower().split(' ', 1)[1]
-            if m_val in ['invite', 'launch', 'both']:
-                action_mode = m_val
-                print(f"Mode set to {action_mode.upper()}")
-            else:
-                print("Unknown mode. Use invite, launch, or both.")
+        elif user_input.lower().startswith('type'):
+            val = user_input.lower().replace('type', '').strip()
+            if not val:
+                val = console.input("Type (friends, friends+, invite, public): ").strip().lower()
+            if val in ['friends']: current_instance_type = InstanceType.FRIENDS
+            elif val in ['friends+', 'hidden']: current_instance_type = InstanceType.HIDDEN
+            elif val in ['invite', 'invite+', 'private']: current_instance_type = InstanceType.PRIVATE
+            elif val in ['public']: current_instance_type = InstanceType.PUBLIC
+            status_msg = f"Instance type set to {current_instance_type}"
             continue
 
-        # --- Interactive Menus ---
-        elif user_input.lower() == 'help':
-            print("\n--- Available Commands ---")
-            print(" [empty] : Advance to the next world in the list")
-            print(" [number]: Jump to a specific world index")
-            print(" type    : Change the instance type (Friends, Friends+, Public, etc.)")
-            print(" mode    : Toggle between API Invites and Launching the client")
-            print(" update  : Add users from your current instance to co-explorers")
-            print(" add     : Manually add a co-explorer by User ID")
-            print(" remove  : Remove a user from your co-explorers list")
-            print(" clear   : Clear your co-explorers list completely")
-            print(" fav     : Add the world you are currently in to VRCX favorites")
+        elif user_input.lower().startswith('mode'):
+            val = user_input.lower().replace('mode', '').strip()
+            if not val:
+                val = console.input("Mode (invite, launch, both): ").strip().lower()
+            if val in ['invite', 'launch', 'both']:
+                action_mode = val
+                status_msg = f"Mode set to {action_mode.upper()}"
             continue
 
-        elif user_input.lower() == 'type':
-            print(f"\nCurrent Type: {current_instance_type}")
-            print("1. Friends (Default)")
-            print("2. Friends+ (Hidden)")
-            print("3. Invite Only (Private)")
-            print("4. Public")
-            try:
-                t_choice = int(input("Select type (1-4, 0 to cancel): ").strip())
-                if t_choice == 1: current_instance_type = InstanceType.FRIENDS
-                elif t_choice == 2: current_instance_type = InstanceType.HIDDEN
-                elif t_choice == 3: current_instance_type = InstanceType.PRIVATE
-                elif t_choice == 4: current_instance_type = InstanceType.PUBLIC
-                if 1 <= t_choice <= 4:
-                    print(f"Instance type set to {current_instance_type}")
-            except ValueError:
-                print("Cancelled or invalid input.")
-            continue
-
-        elif user_input.lower() == 'mode':
-            print(f"\nCurrent Mode: {action_mode.upper()}")
-            print("1. Invite (Send API invites to yourself and co-explorers)")
-            print("2. Launch (Open VRChat client directly via URI)")
-            print("3. Both (Launch client AND invite co-explorers)")
-            try:
-                m_choice = int(input("Select mode (1-3, 0 to cancel): ").strip())
-                if m_choice == 1: action_mode = "invite"
-                elif m_choice == 2: action_mode = "launch"
-                elif m_choice == 3: action_mode = "both"
-                if 1 <= m_choice <= 3:
-                    print(f"Mode set to {action_mode.upper()}")
-            except ValueError:
-                print("Cancelled or invalid input.")
-            continue
-
-        # --- Handle co-explorer management commands ---
         elif user_input.lower() == 'update':
-            print("Fetching users from your current instance...")
-            co_explorers = handle_update_command(api_client, co_explorers, current_user.id)
-            save_co_explorers(worldhoppers_file_path, co_explorers)
+            api_auth = AuthenticationApi(api_client)
+            user = api_auth.get_current_user()
+            if getattr(user, 'presence', None):
+                w_id = getattr(user.presence, 'world', None)
+                i_id = getattr(user.presence, 'instance', None)
+                if w_id and i_id:
+                    users = get_instance_users(api_client, w_id, i_id)
+                    co_explorers = [u for u in users if u['uid'] != current_user.id]
+                    save_co_explorers(worldhoppers_file_path, co_explorers)
+                    status_msg = f"Updated party with {len(co_explorers)} users from current instance."
+                else:
+                    status_msg = "[red]Not in a valid instance.[/red]"
             continue
 
         elif user_input.lower() == 'clear':
-            result = handle_clear_command()
-            if result is not None:
-                co_explorers = result
-                save_co_explorers(worldhoppers_file_path, co_explorers)
+            co_explorers = []
+            save_co_explorers(worldhoppers_file_path, co_explorers)
+            status_msg = "Party cleared."
             continue
 
         elif user_input.lower() == 'add':
-            co_explorers = handle_add_command(api_client, co_explorers)
-            save_co_explorers(worldhoppers_file_path, co_explorers)
+            uid = console.input("Enter user ID: ").strip()
+            if re.match(r"^usr_[0-9a-fA-F-]{36}$", uid):
+                user_info = get_user_by_id(api_client, uid)
+                if user_info:
+                    co_explorers.append(user_info)
+                    save_co_explorers(worldhoppers_file_path, co_explorers)
+                    status_msg = f"Added {user_info['name']}."
             continue
 
         elif user_input.lower() == 'remove':
-            co_explorers = handle_remove_command(co_explorers)
-            save_co_explorers(worldhoppers_file_path, co_explorers)
+            try:
+                idx = int(console.input("Enter number to remove: ").strip()) - 1
+                if 0 <= idx < len(co_explorers):
+                    removed = co_explorers.pop(idx)
+                    save_co_explorers(worldhoppers_file_path, co_explorers)
+                    status_msg = f"Removed {removed['name']}."
+            except ValueError:
+                pass
             continue
 
         elif user_input.lower() == 'fav':
             if vrcx_allowed:
-                current_world_id = get_current_presence_world_id(api_client)
-                print(f"\n[!] Adding {current_world_id} to {vrcx_fav_group}")
-                status = add_favorite_world(vrcx_db_path, current_world_id, vrcx_fav_group)
-                if status == "added":
-                    print(f"\n[+] Success! Added {current_world_id} to >{vrcx_fav_group}<")
-                elif status == "duplicate":
-                    print(f"\n[!] Skip: This world is already in the '{vrcx_fav_group}' group.")
-                else:
-                    print(f"\n[X] Error: Could not add to database. (Check if VRCX has a heavy lock)")
+                cid = get_current_presence_world_id(api_client)
+                status = add_favorite_world(vrcx_db_path, cid, vrcx_fav_group)
+                if status == "added": status_msg = f"[green]Added {cid} to {vrcx_fav_group}[/green]"
+                elif status == "duplicate": status_msg = f"[yellow]World already in {vrcx_fav_group}[/yellow]"
+                else: status_msg = "[red]Database locked/Error.[/red]"
             else:
-                print(f"\nVRCX interactions is set to {vrcx_allowed}. \nIf you want to do this, change from false to true in settings.json and restart the script. \nOn linux, make sure it's pointing at your vrcx database. I take no responsibility over what happens to your vrcx db. \nTake a backup. \nAlso remember that worlds doesn't show up in VRCX immediately. But does after a restart of VRCX.")
+                status_msg = "[red]VRCX interaction disabled in settings.[/red]"
             continue
 
-        # --- Normal navigation ---
         elif user_input == "":
             if activeJumpIndex == 0 and last_index == 0 and newsession:
                 activeJumpIndex = 0
@@ -438,123 +326,68 @@ def run(api_client, current_user, settingsdata):
                 activeJumpIndex = last_index + 1
         else:
             try:
-                activeJumpIndex = int(user_input)
+                # Interpret user numerical input based on the 1-based index shown in the UI
+                activeJumpIndex = int(user_input) - 1
             except ValueError:
                 continue
 
         if not (0 <= activeJumpIndex < len(json_list)) or activeJumpIndex == 500:
             break
 
-        # Rate limiting
         elapsed = int(time.time()) - lastInviteTime
         if elapsed < apiHappyTime:
-            to_sleep = apiHappyTime - elapsed
-            print(f"Sleeping for {to_sleep} seconds to keep the servers happy")
-            time.sleep(to_sleep)
+            time.sleep(apiHappyTime - elapsed)
 
         last_index = activeJumpIndex
         target_world_id = json_list[activeJumpIndex]['id']
 
         try:
             joined_existing = False
-            world_asset_name = "Unknown World"
-            world_author_name = "Unknown"
             world_location = ""
-            unity_version = "unknown"
 
-            # --- Public Instance Logic ---
-            if current_instance_type == InstanceType.PUBLIC:
-                try:
-                    print("Checking for existing public instances...")
+            with console.status(f"[cyan]Initializing jump to index {activeJumpIndex + 1}...[/cyan]"):
+                if current_instance_type == InstanceType.PUBLIC:
                     world_info = api_world_instance.get_world(target_world_id)
-                    world_asset_name = world_info.name
-                    world_author_name = world_info.author_name
-                    unity_version = get_unity_version(clean_for_json(world_info))
-
                     capacity = getattr(world_info, 'capacity', 16)
-
                     if hasattr(world_info, 'instances') and world_info.instances:
-                        best_instance_id = None
-                        for inst in world_info.instances:
-                            if len(inst) >= 2 and inst[1] < capacity:
-                                best_instance_id = inst[0]
-                                break
-
-                        if not best_instance_id:
-                            best_instance_id = world_info.instances[0][0]
-
-                        world_location = f"{world_info.id}:{best_instance_id}"
-                        joined_existing = True
-                        print("[+] Found and selected an active public instance.")
+                        best = next((inst[0] for inst in world_info.instances if len(inst) >= 2 and inst[1] < capacity), world_info.instances[0][0])
+                        world_location = f"{world_info.id}:{best}"
                     else:
-                        print("[-] No active public instances found. Generating a new public instance.")
-                        # Nonce bypass: dynamically generate an instance tag without asking the API to create it
-                        nonce = random.randint(10000, 99999)
-                        world_location = f"{world_info.id}:{nonce}~region(eu)"
-                        joined_existing = True
-                except ApiException as e:
-                    print(f"Failed to check for public instances: {e}")
+                        world_location = f"{world_info.id}:{random.randint(10000, 99999)}~region(eu)"
+                    joined_existing = True
+                    current_world_info['unity'] = get_unity_version(clean_for_json(world_info))
 
-            # --- Standard Instance Creation Logic (Friends, Private, etc.) ---
-            if not joined_existing:
-                instance_args = {
-                    "world_id": target_world_id,
-                    "type": current_instance_type,
-                    "region": InstanceRegion.EU
-                }
+                if not joined_existing:
+                    instance_args = {"world_id": target_world_id, "type": current_instance_type, "region": InstanceRegion.EU}
+                    if current_instance_type != InstanceType.PUBLIC:
+                        instance_args["owner_id"] = current_user.id
+                    if has_vrcplus and instance_name and current_instance_type != InstanceType.PUBLIC:
+                        instance_args["display_name"] = instance_name
 
-                # Only assign an owner if it's NOT a public instance
-                if current_instance_type != InstanceType.PUBLIC:
-                    instance_args["owner_id"] = current_user.id
+                    created_instance = api_instance_instance.create_instance(create_instance_request=CreateInstanceRequest(**instance_args))
+                    created = clean_for_json(created_instance)
+                    world_location = created.get('location') or created.get('id')
+                    current_world_info['unity'] = get_unity_version(created)
 
-                # Only append the display_name parameter if they have VRC+ AND the instance isn't public
-                if has_vrcplus and instance_name and current_instance_type != InstanceType.PUBLIC:
-                    instance_args["display_name"] = instance_name
+                if action_mode == "invite":
+                    parts = world_location.split(':')
+                    api_invite_instance.invite_myself_to(parts[0], parts[1] if len(parts) > 1 else "")
+                elif action_mode in ["launch", "both"]:
+                    webbrowser.open(f"vrchat://launch/?ref=vrchat.com&id={world_location}&attach=1")
 
-                created_instance = api_instance_instance.create_instance(
-                    create_instance_request=CreateInstanceRequest(**instance_args)
-                )
-                created = clean_for_json(created_instance)
-                unity_version = get_unity_version(created)
-                world_asset_name = (created.get('world') or {}).get('name', 'Unknown World')
-                world_author_name = (created.get('world') or {}).get('author_name')
-                world_location = created.get('location') or created.get('id')
-
-            print("\n-------------------------------------------------------------------------------------------------------")
-            print(f"Targeting #{last_index}: {world_asset_name} by {world_author_name}")
-            print(f"World id: {world_location}")
-            print(f"Unity version: {unity_version}")
-            print(f"Instance Type: {current_instance_type}")
-            print("-------------------------------------------------------------------------------------------------------")
-
-            # Personal execution based on Mode
-            if action_mode == "invite":
-                parts = world_location.split(':')
-                api_invite_instance.invite_myself_to(parts[0], parts[1] if len(parts) > 1 else "")
-                print("Invited myself via API.")
-            elif action_mode in ["launch", "both"]:
-                launch_uri = f"vrchat://launch/?ref=vrchat.com&id={world_location}&attach=1"
-                print("Launching VRChat client directly...")
-                webbrowser.open(launch_uri)
-
-            # Invite all co-explorers based on Mode
-            if action_mode in ["invite", "both"]:
-                if co_explorers:
-                    print(f"Inviting {len(co_explorers)} co-explorers:")
+                invites_sent = 0
+                if action_mode in ["invite", "both"] and co_explorers:
                     for explorer in co_explorers:
                         try:
                             api_invite_instance.invite_user(explorer['uid'], vrchatapi.InviteRequest(instance_id=world_location))
-                            print(f"  → Invited {explorer['name']}")
-                        except Exception as e:
-                            print(f"  ✗ Failed to invite {explorer['name']}: {e}")
-                else:
-                    if action_mode == "invite":
-                        print("No co-explorers in list to invite.")
+                            invites_sent += 1
+                        except Exception:
+                            pass
 
-            lastInviteTime = int(time.time())
-            print("\n")
+                status_msg = f"[green]Jump successful.[/green] Invited self. Sent {invites_sent} party invites."
+                lastInviteTime = int(time.time())
 
         except Exception as e:
-            print(f"Critical error during jump: {e}")
+            status_msg = f"[red]Error during jump: {e}[/red]"
 
-    print("Session finished.")
+    console.print("Session finished.")

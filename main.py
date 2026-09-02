@@ -4,7 +4,7 @@ import getpass
 import importlib
 import base64
 import time
-import argparse  # <--- Added for command-line arguments
+import argparse
 from http.cookiejar import Cookie
 
 import vrchatapi
@@ -14,6 +14,12 @@ from vrchatapi.models.two_factor_auth_code import TwoFactorAuthCode
 from vrchatapi.models.two_factor_email_code import TwoFactorEmailCode
 from vrchatapi.models.limited_world import LimitedWorld
 from vrchatapi.models.world import World
+
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+
+console = Console()
 
 # --- MONKEY PATCH TO FIX SDK VALIDATION ERROR ---
 def patched_name_setter(self, name):
@@ -48,14 +54,9 @@ def unscramble(text):
 def make_cookie(name, value, expire_time):
     return Cookie(0, name, value, None, False, "api.vrchat.cloud", True, False, "/", False, False, expire_time, False, None, None, {})
 
-def save_settings(settings_path, data):
-    with open(settings_path, 'w') as f:
-        json.dump(data, f, indent=4)
-
 def main():
-    # --- Command Line Argument Setup ---
     parser = argparse.ArgumentParser(description="VRChat Toolbox")
-    parser.add_argument('--run', type=str, help='Directly run a tool module by name (e.g., --run export_calendar)')
+    parser.add_argument('--run', type=str, help='Directly run a tool module by name')
     args = parser.parse_args()
     is_automated = bool(args.run)
 
@@ -67,15 +68,9 @@ def main():
 
     cookie_file_path = settingsdata['files']['cookie_path']
     cred_file_path = settingsdata['files'].get('cred_path', 'nope/cred.json')
-
     lifetime_days = settingsdata['files'].get('cookie_lifetime_days', 30)
+    expire_time = int(time.time()) + (lifetime_days * 86400) if lifetime_days else None
 
-    if lifetime_days is None:
-        expire_time = None
-    else:
-        expire_time = int(time.time()) + (lifetime_days * 86400)
-
-    # --- Ensure Credentials File & Folder Exist ---
     cred_dir = os.path.dirname(cred_file_path)
     if cred_dir:
         os.makedirs(cred_dir, exist_ok=True)
@@ -94,25 +89,23 @@ def main():
 
     if not vrc_user or not vrc_pass:
         if is_automated:
-            print("Automated Run Error: Missing credentials in cred.json. Run manually first.")
+            console.print("[red]Automated Run Error: Missing credentials in cred.json. Run manually first.[/red]")
             return
 
-        print("\n--- Authentication Setup ---")
+        console.print(Panel("[bold]Authentication Setup[/bold]", expand=False))
         if not vrc_user:
-            vrc_user = input("Enter VRChat Username: ")
+            vrc_user = console.input("Enter VRChat Username: ")
             manual_login = True
         if not vrc_pass:
             vrc_pass = getpass.getpass("Enter VRChat Password: ")
             manual_login = True
-        print("----------------------------\n")
 
     configuration = vrchatapi.Configuration(username=vrc_user, password=vrc_pass)
 
     with vrchatapi.ApiClient(configuration) as api_client:
-        api_client.user_agent = "VRChatToolbox/0.1.0 akoj93@gmail.com"
+        api_client.user_agent = "VRChatToolbox/0.1.0"
         auth_api = authentication_api.AuthenticationApi(api_client)
 
-        # --- Cookie / Login Handling ---
         if os.path.exists(cookie_file_path):
             with open(cookie_file_path, 'r') as f:
                 cookiedata = json.load(f)
@@ -122,12 +115,12 @@ def main():
             try:
                 current_user = auth_api.get_current_user()
                 if not is_automated:
-                    print(f"Logged in via cookie as: {current_user.display_name} ({current_user.id})")
+                    console.print(f"[green]Logged in via cookie as: {current_user.display_name}[/green]")
             except UnauthorizedException:
                 if is_automated:
-                    print("Automated Run Error: Session expired. Run manually to log in again.")
+                    console.print("[red]Automated Run Error: Session expired.[/red]")
                     return
-                print("Session expired. Please log in again.")
+                console.print("[yellow]Session expired. Please log in again.[/yellow]")
                 os.remove(cookie_file_path)
                 return
         else:
@@ -135,22 +128,18 @@ def main():
                 current_user = auth_api.get_current_user()
             except UnauthorizedException as e:
                 if is_automated:
-                    print("Automated Run Error: 2FA required. Run manually to log in.")
+                    console.print("[red]Automated Run Error: 2FA required.[/red]")
                     return
-
                 if e.status == 200:
                     if "Email" in e.reason:
                         auth_api.verify2_fa_email_code(two_factor_email_code=TwoFactorEmailCode(input("Email 2FA Code: ")))
                     else:
                         auth_api.verify2_fa(two_factor_auth_code=TwoFactorAuthCode(input("2FA Code: ")))
-
-                    # Force a refresh to guarantee session updates and cookies are populated
                     current_user = auth_api.get_current_user()
                 else:
-                    print(f"Login failed: {e.reason}")
+                    console.print(f"[red]Login failed: {e.reason}[/red]")
                     return
 
-            # Safely navigate the cookies dictionary using defensive .get() calls
             vrc_cookies = api_client.rest_client.cookie_jar._cookies.get("api.vrchat.cloud", {}).get("/", {})
             auth_cookie = vrc_cookies.get("auth")
             tf_cookie = vrc_cookies.get("twoFactorAuth")
@@ -159,23 +148,19 @@ def main():
                 cookie_dir = os.path.dirname(cookie_file_path)
                 if cookie_dir:
                     os.makedirs(cookie_dir, exist_ok=True)
-
                 with open(cookie_file_path, 'w') as f:
                     json.dump({"auth": auth_cookie.value, "twoFactorAuth": tf_cookie.value}, f)
-                print(f"Logged in as: {current_user.display_name} ({current_user.id})")
-            else:
-                print("Warning: Logged in, but could not capture authentication cookies for caching.")
+                console.print(f"[green]Logged in as: {current_user.display_name}[/green]")
 
         if manual_login:
-            save_choice = input("Do you want to save your username and password for next time? (Y/N): ").strip().lower()
+            save_choice = console.input("Do you want to save your username and password for next time? (Y/N): ").strip().lower()
             if save_choice == 'y':
                 cred_data['username'] = scramble(vrc_user)
                 cred_data['password'] = scramble(vrc_pass)
                 with open(cred_file_path, 'w') as f:
                     json.dump(cred_data, f, indent=4)
-                print(f"Credentials scrambled and saved to {cred_file_path}.")
+                console.print("[green]Credentials securely saved.[/green]")
 
-        # --- Direct Run Execution (Bypasses Menu) ---
         if is_automated:
             target_tool = next((tool for tool in REGISTERED_TOOLS if tool['module'] == args.run), None)
             if target_tool:
@@ -183,50 +168,41 @@ def main():
                     module = importlib.import_module(target_tool['module'])
                     module.run(api_client, current_user, settingsdata)
                 except Exception as e:
-                    print(f"Failed to execute tool '{args.run}': {e}")
-            else:
-                print(f"Error: Tool '{args.run}' not found in registered tools.")
-            return # Exits the script immediately after running
+                    console.print(f"[red]Failed to execute tool '{args.run}': {e}[/red]")
+            return
 
-        # --- Menu System Loop ---
         while True:
-            print("\n--- Available Tools ---")
-            for idx, tool in enumerate(REGISTERED_TOOLS):
-                print(f"[{idx}] {tool['name']}")
-            print("[l] Logout (Clear credentials & cookies)")
-            print("[q] Quit")
+            table = Table(title="Available Tools", show_header=True, header_style="bold magenta")
+            table.add_column("Key", justify="center")
+            table.add_column("Tool Name")
 
-            choice = input("\nSelect an option: ").strip()
+            for idx, tool in enumerate(REGISTERED_TOOLS):
+                table.add_row(str(idx), tool['name'])
+            table.add_row("l", "[yellow]Logout (Clear credentials & cookies)[/yellow]")
+            table.add_row("q", "[red]Quit[/red]")
+
+            console.print("\n")
+            console.print(table)
+            choice = console.input("\nSelect an option: ").strip()
 
             if choice.lower() == 'q':
                 break
-
             if choice.lower() == 'l':
-                print("Logging out...")
-                if os.path.exists(cookie_file_path):
-                    os.remove(cookie_file_path)
-                with open(cred_file_path, 'w') as f:
-                    json.dump({"username": "", "password": ""}, f, indent=4)
+                if os.path.exists(cookie_file_path): os.remove(cookie_file_path)
+                with open(cred_file_path, 'w') as f: json.dump({"username": "", "password": ""}, f, indent=4)
                 api_client.rest_client.cookie_jar.clear()
-                print("Logged out. Credentials and cookies have been cleared from disk.")
+                console.print("[green]Logged out completely.[/green]")
                 break
 
             try:
-                choice_idx = int(choice)
-                selected_tool = REGISTERED_TOOLS[choice_idx]
-            except (ValueError, IndexError):
-                print("Invalid selection. Try again.")
-                continue
-
-            print(f"\nLoading module: {selected_tool['module']}...")
-            try:
+                selected_tool = REGISTERED_TOOLS[int(choice)]
+                console.print(f"\n[cyan]Loading module: {selected_tool['module']}...[/cyan]")
                 module = importlib.import_module(selected_tool['module'])
-                if hasattr(module, 'run'):
-                    module.run(api_client, current_user, settingsdata)
-                else:
-                    print(f"Error: The module '{selected_tool['module']}' must have a 'run' function.")
+                module.run(api_client, current_user, settingsdata)
+            except (ValueError, IndexError):
+                console.print("[red]Invalid selection.[/red]")
             except Exception as e:
-                print(f"Failed to execute tool: {e}")
+                console.print(f"[red]Failed to execute tool: {e}[/red]")
 
 if __name__ == "__main__":
     main()

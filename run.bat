@@ -1,6 +1,10 @@
 @echo off
 SETLOCAL EnableDelayedExpansion
 
+:: Force Terminal and Python to use UTF-8
+chcp 65001 >nul
+SET "PYTHONUTF8=1"
+
 :: --- Configuration ---
 SET "VENV_DIR=.venv"
 SET "SCRIPT_NAME=main.py"
@@ -18,30 +22,24 @@ if not exist "%VENV_DIR%" (
     )
 )
 
-:: 2. Activate venv and check/install vrchatapi
+:: 2. Activate venv and check/install dependencies
 echo Activating environment...
 call "%VENV_DIR%\Scripts\activate"
 
 :: We check if packages are installed by trying to show its info
-pip show vrchatapi >nul 2>&1
-if %errorlevel% neq 0 (
-    echo vrchatapi not found. Installing...
-    py -m pip install vrchatapi
-) else (
-    echo vrchatapi is already installed.
-)
-
-pip show icalendar >nul 2>&1
-if %errorlevel% neq 0 (
-    echo icalendar not found. Installing...
-    py -m pip install icalendar
-) else (
-    echo icalendar is already installed.
+for %%P in (vrchatapi icalendar rich) do (
+    pip show %%P >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo %%P not found. Installing...
+        py -m pip install %%P
+    ) else (
+        echo %%P is already installed.
+    )
 )
 
 :: 3. Run the script
 echo.
-echo Starting Tummy Funny Scripts...
+echo Starting VRChat Toolbox...
 echo ---------------------------------
 python "%SCRIPT_NAME%"
 
