@@ -7,3 +7,4 @@ __pycache__/
 .idea
 worldhoppers.json
 cred.json
+world_visits.log
