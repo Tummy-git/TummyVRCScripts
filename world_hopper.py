@@ -143,6 +143,13 @@ def get_current_presence_world_id(api_client):
     except Exception:
         return None
 
+def clear_screen():
+    # Rich's clear does nothing on consoles in legacy Windows mode, which leaves old frames on screen
+    if console.legacy_windows:
+        os.system('cls')
+    else:
+        console.clear()
+
 def list_table():
     table = Table(show_header=False, box=None, padding=(0, 1), expand=True)
     table.add_column(justify="right", no_wrap=True, style="dim")
@@ -236,7 +243,7 @@ def render_dashboard(json_list, active_idx, visited, current_world_info, instanc
         main_grid.add_row(Text.assemble(("Next: ", "dim"), next_name, sep, type_name, sep, launch_mode.upper(), sep,
                                         f"Party: {len(co_explorers)}", no_wrap=True, overflow="ellipsis"))
 
-    console.clear()
+    clear_screen()
     console.print(main_grid)
     console.print(KEY_HINTS, style="dim", no_wrap=True, overflow="ellipsis")
     console.print(f"[bold]System:[/bold] {status_msg or 'Ready.'}")
@@ -247,7 +254,7 @@ def show_help():
     table.add_column()
     for command, description in HELP_ROWS:
         table.add_row(Text(command), description)
-    console.clear()
+    clear_screen()
     console.print(table)
     console.input("Press Enter to return...")
 

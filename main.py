@@ -21,6 +21,22 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
+def enable_windows_ansi():
+    """Lets the classic cmd.exe console understand the escape codes Rich uses to clear and redraw the screen.
+    Without this Rich falls back to a legacy mode where clearing the screen does nothing."""
+    if os.name != 'nt':
+        return
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+    for std_handle in (-11, -12):  # stdout, stderr
+        handle = kernel32.GetStdHandle(std_handle)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+
+# Must run before any Console is created, since Rich picks its mode when the Console is constructed
+enable_windows_ansi()
 console = Console()
 
 # --- MONKEY PATCH TO FIX SDK VALIDATION ERROR ---
