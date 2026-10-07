@@ -1,25 +1,16 @@
 import os
-import json
 import vrchatapi
 from rich.console import Console
 from rich.table import Table
+from json_utils import load_json_list, save_json_list
 
 console = Console()
 
 def load_groups(file_path):
-    if not os.path.exists(file_path): return []
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, IOError):
-        return []
+    return load_json_list(file_path)
 
 def save_groups(file_path, groups):
-    dir_path = os.path.dirname(file_path)
-    if dir_path and not os.path.exists(dir_path): os.makedirs(dir_path, exist_ok=True)
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(groups, f, indent=2, ensure_ascii=False)
+    save_json_list(file_path, groups)
     console.print(f"[green]Groups file saved. Total: {len(groups)}[/green]")
 
 def display_groups(groups):
@@ -55,6 +46,7 @@ def prompt_remove_group(groups, groups_file_path):
     try:
         idx = int(console.input("Enter number to remove (0 cancel): ").strip())
         if idx == 0: return groups
+        if not 1 <= idx <= len(groups): raise IndexError(idx)
         removed = groups.pop(idx-1)
         save_groups(groups_file_path, groups)
         console.print(f"[red]Removed {removed.get('name') or removed.get('id')}[/red]")
@@ -89,7 +81,7 @@ def run(api_client, current_user, settingsdata):
     groups = load_groups(groups_file_path)
 
     while True:
-        # The brackets are now escaped below using double backslashes
+        # Brackets are escaped so Rich doesn't treat [l] etc. as markup tags
         console.print("\n[bold]Groups Manager:[/bold] [cyan]\\[l]ist, \\[a]dd, \\[r]emove, \\[f]ill-names, \\[q]uit[/cyan]")
         cmd = console.input("Select: ").strip().lower()
         if cmd in ('q','quit'): break

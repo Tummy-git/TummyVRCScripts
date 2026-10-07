@@ -21,15 +21,8 @@ fi
 echo "Activating environment..."
 source "$VENV_DIR/bin/activate"
 
-# Dependency checker loop
-for pkg in vrchatapi icalendar rich; do
-    if ! pip show $pkg > /dev/null 2>&1; then
-        echo "$pkg not found. Installing..."
-        python3 -m pip install $pkg
-    else
-        echo "$pkg is already installed."
-    fi
-done
+# Install/update dependencies to the versions pinned in requirements.txt
+python3 -m pip install -q -r requirements.txt
 
 # 3. Run the script, forwarding any arguments (like --run)
 echo ""

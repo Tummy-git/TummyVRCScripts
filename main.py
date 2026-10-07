@@ -1,5 +1,7 @@
 import os
+import sys
 import json
+import shutil
 import getpass
 import importlib
 import base64
@@ -56,6 +58,11 @@ def make_cookie(name, value, expire_time):
     return Cookie(0, name, value, None, False, "api.vrchat.cloud", True, False, "/", False, False, expire_time, False, None, None, {})
 
 def main():
+    # Redirected output (cron, Task Scheduler) can default to a legacy codepage that can't print e.g. Japanese group names
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
+
     parser = argparse.ArgumentParser(description="VRChat Toolbox")
     parser.add_argument('--run', type=str, help='Directly run a tool module by name')
     args = parser.parse_args()
@@ -64,11 +71,15 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     settings_path = os.path.join(script_dir, 'settings.json')
 
+    if not os.path.exists(settings_path):
+        shutil.copyfile(os.path.join(script_dir, 'settings.example.json'), settings_path)
+        console.print("[yellow]Created settings.json from settings.example.json.[/yellow]")
+
     with open(settings_path, 'r') as f:
         settingsdata = json.load(f)
 
-    cookie_file_path = settingsdata['files']['cookie_path']
-    cred_file_path = settingsdata['files'].get('cred_path', 'nope/cred.json')
+    cookie_file_path = os.path.join(script_dir, settingsdata['files']['cookie_path'])
+    cred_file_path = os.path.join(script_dir, settingsdata['files'].get('cred_path', 'nope/cred.json'))
     lifetime_days = settingsdata['files'].get('cookie_lifetime_days', 30)
     expire_time = int(time.time()) + (lifetime_days * 86400) if lifetime_days else None
 
@@ -107,6 +118,8 @@ def main():
         api_client.user_agent = "VRChatToolbox/0.1.0"
         auth_api = authentication_api.AuthenticationApi(api_client)
 
+        current_user = None
+
         if os.path.exists(cookie_file_path):
             with open(cookie_file_path, 'r') as f:
                 cookiedata = json.load(f)
@@ -118,28 +131,25 @@ def main():
                 if not is_automated:
                     console.print(f"[green]Logged in via cookie as: {current_user.display_name}[/green]")
             except UnauthorizedException:
-                if is_automated:
-                    console.print("[red]Automated Run Error: Session expired.[/red]")
-                    return
-                console.print("[yellow]Session expired. Please log in again.[/yellow]")
+                console.print("[yellow]Session expired. Logging in again...[/yellow]")
                 os.remove(cookie_file_path)
-                return
-        else:
+                api_client.rest_client.cookie_jar.clear()
+
+        if current_user is None:
             try:
                 current_user = auth_api.get_current_user()
             except UnauthorizedException as e:
-                if is_automated:
-                    console.print("[red]Automated Run Error: 2FA required.[/red]")
-                    return
-                if e.status == 200:
-                    if "Email" in e.reason:
-                        auth_api.verify2_fa_email_code(two_factor_email_code=TwoFactorEmailCode(input("Email 2FA Code: ")))
-                    else:
-                        auth_api.verify2_fa(two_factor_auth_code=TwoFactorAuthCode(input("2FA Code: ")))
-                    current_user = auth_api.get_current_user()
-                else:
+                if e.status != 200:
                     console.print(f"[red]Login failed: {e.reason}[/red]")
                     return
+                if is_automated:
+                    console.print("[red]Automated Run Error: 2FA required. Run manually first.[/red]")
+                    return
+                if "Email" in e.reason:
+                    auth_api.verify2_fa_email_code(two_factor_email_code=TwoFactorEmailCode(input("Email 2FA Code: ")))
+                else:
+                    auth_api.verify2_fa(two_factor_auth_code=TwoFactorAuthCode(input("2FA Code: ")))
+                current_user = auth_api.get_current_user()
 
             vrc_cookies = api_client.rest_client.cookie_jar._cookies.get("api.vrchat.cloud", {}).get("/", {})
             auth_cookie = vrc_cookies.get("auth")

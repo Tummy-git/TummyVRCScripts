@@ -7,17 +7,11 @@ import vrchatapi
 from vrchatapi.api.calendar_api import CalendarApi
 from vrchatapi.api.groups_api import GroupsApi
 from groups_manager import load_groups, save_groups
+from json_utils import clean_for_json
 from rich.console import Console
 
 # force_terminal=False ensures that when run via cron, Rich strips color codes to keep logs clean
 console = Console(force_terminal=False)
-
-def clean_for_json(obj):
-    if hasattr(obj, "to_dict"): return clean_for_json(obj.to_dict())
-    elif isinstance(obj, dict): return {k: clean_for_json(v) for k, v in obj.items()}
-    elif isinstance(obj, list): return [clean_for_json(item) for item in obj]
-    elif isinstance(obj, (datetime.datetime, datetime.date)): return obj.isoformat()
-    return obj
 
 def json_to_ical(events_data):
     cal = Calendar()
@@ -40,7 +34,8 @@ def json_to_ical(events_data):
         if not isinstance(event_data, dict): continue
         event = Event()
         title = event_data.get('title', 'No Title')
-        event.add('summary', title)
+        is_cancelled = event_data.get('deleted_at') is not None
+        event.add('summary', f"CANCELLED: {title}" if is_cancelled else title)
         event.add('description', event_data.get('description', ''))
         if event_data.get('id'): event.add('uid', event_data.get('id'))
 
@@ -53,9 +48,8 @@ def json_to_ical(events_data):
 
         if event_data.get('owner_id') and event_data.get('id'):
             event.add('location', f"https://vrchat.com/home/group/{event_data['owner_id']}/calendar/{event_data['id']}")
-        if event_data.get('deleted_at') is not None:
+        if is_cancelled:
             event.add('status', 'CANCELLED')
-            event.add('summary', f"CANCELLED: {title}")
         cal.add_component(event)
 
     return cal.to_ical()
@@ -67,6 +61,40 @@ def extract_events_from_response(response):
         for key in response:
             if isinstance(response[key], list): return response[key]
     return []
+
+def fetch_all_pages(fetch_page, page_size=100, max_pages=20):
+    """Calls fetch_page(n=..., offset=...) until the API reports no further pages."""
+    events, offset = [], 0
+    for _ in range(max_pages):
+        page = clean_for_json(fetch_page(n=page_size, offset=offset))
+        results = extract_events_from_response(page)
+        events.extend(results)
+        if not results or not (isinstance(page, dict) and page.get('has_next')): break
+        # The API may return more or fewer than n results, so advance by what was actually received
+        offset += len(results)
+    return events
+
+def months_to_fetch(days_ahead):
+    """ISO dates for the first day of each month from now until the end of the export window (a year if unlimited)."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    end = now + datetime.timedelta(days=days_ahead if days_ahead and days_ahead > 0 else 365)
+    year, month = now.year, now.month
+    months = []
+    while (year, month) <= (end.year, end.month):
+        months.append(f"{year:04d}-{month:02d}-01T00:00:00.000Z")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months
+
+def dedupe_events(events):
+    seen_ids = set()
+    unique = []
+    for event in events:
+        event_id = event.get('id') if isinstance(event, dict) else None
+        if event_id:
+            if event_id in seen_ids: continue
+            seen_ids.add(event_id)
+        unique.append(event)
+    return unique
 
 def filter_upcoming_events(events, days_ahead=None):
     if days_ahead is None or days_ahead <= 0: return events
@@ -97,8 +125,10 @@ def run(api_client, current_user, settingsdata):
         calendar_api = CalendarApi(api_client)
         all_events = []
 
+        # The followed-events endpoint only returns one month at a time, so ask for each month in the window
         console.print("  - Fetching followed calendar events...")
-        all_events.extend(extract_events_from_response(clean_for_json(calendar_api.get_followed_calendar_events())))
+        for month in months_to_fetch(days_ahead):
+            all_events.extend(fetch_all_pages(lambda **page: calendar_api.get_followed_calendar_events(date=month, **page)))
 
         groups_file_path = os.path.join(script_dir, settingsdata['files'].get('groups_path', 'groups.json'))
         groups = load_groups(groups_file_path)
@@ -121,11 +151,13 @@ def run(api_client, current_user, settingsdata):
 
                 try:
                     console.print(f"  - Fetching events for group: {group_id} ({g.get('name')})")
-                    all_events.extend(extract_events_from_response(clean_for_json(calendar_api.get_group_calendar_events(group_id))))
+                    all_events.extend(fetch_all_pages(lambda **page: calendar_api.get_group_calendar_events(group_id, **page)))
                 except Exception as e:
                     console.print(f"  [yellow]- Warning: Failed to fetch events for group {group_id}: {e}[/yellow]")
         else:
             console.print("  - No followed groups configured.")
+
+        all_events = dedupe_events(all_events)
 
         if days_ahead and days_ahead > 0:
             all_events = filter_upcoming_events(all_events, days_ahead)

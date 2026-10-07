@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import time
+from pathlib import Path
 from datetime import datetime, timezone
 
 def add_favorite_world(db_path, world_id, group_name, max_retries=5):
@@ -15,7 +16,12 @@ def add_favorite_world(db_path, world_id, group_name, max_retries=5):
     :return: A string status: "added", "duplicate", or "error".
     """
     # Expand %appdata% or ~ to a real system path
-    actual_db_path = os.path.expanduser(os.path.expandvars(db_path))
+    actual_db_path = os.path.abspath(os.path.expanduser(os.path.expandvars(db_path)))
+    # mode=rw fails if the file is missing instead of creating an empty database
+    db_uri = Path(actual_db_path).as_uri() + "?mode=rw"
+
+    if not world_id:
+        return "error"
 
     # Ensure group_name is a string for SQLite compatibility
     group_name = group_name if group_name else ""
@@ -24,7 +30,7 @@ def add_favorite_world(db_path, world_id, group_name, max_retries=5):
         conn = None
         try:
             # timeout=30 tells SQLite to wait internally for 30s before throwing an error
-            conn = sqlite3.connect(actual_db_path, timeout=30)
+            conn = sqlite3.connect(db_uri, timeout=30, uri=True)
             cursor = conn.cursor()
 
             # 1. CHECK FOR DUPLICATE

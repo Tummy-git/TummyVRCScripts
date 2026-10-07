@@ -1,0 +1,4 @@
+# vrchatapi is pinned exactly: main.py monkey-patches its models and may break on other versions
+vrchatapi==1.21.0
+icalendar~=7.3
+rich~=15.0

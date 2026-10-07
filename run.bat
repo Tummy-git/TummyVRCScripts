@@ -26,24 +26,17 @@ if not exist "%VENV_DIR%" (
 echo Activating environment...
 call "%VENV_DIR%\Scripts\activate"
 
-:: We check if packages are installed by trying to show its info
-for %%P in (vrchatapi icalendar rich) do (
-    pip show %%P >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo %%P not found. Installing...
-        py -m pip install %%P
-    ) else (
-        echo %%P is already installed.
-    )
-)
+:: Install/update dependencies to the versions pinned in requirements.txt
+python -m pip install -q -r requirements.txt
 
-:: 3. Run the script
+:: 3. Run the script, forwarding any arguments (like --run)
 echo.
 echo Starting VRChat Toolbox...
 echo ---------------------------------
-python "%SCRIPT_NAME%"
+python "%SCRIPT_NAME%" %*
 
-:: Keep window open if the script crashes or finishes
+:: Keep window open if the script crashes or finishes (skipped for --run so scheduled runs don't hang)
 echo.
 echo ---------------------------------
 echo Script finished.
+if "%~1"=="" pause

@@ -10,7 +10,7 @@ SCRIPT_VERSION = "0.6.0"
 
 def parse_version(version_string):
     try: return tuple(map(int, version_string.split('.')))
-    except: return (0, 0, 0)
+    except (ValueError, AttributeError): return (0, 0, 0)
 
 def get_latest_impostor_version(avatar_obj):
     unity_packages = getattr(avatar_obj, 'unity_packages', [])
@@ -20,7 +20,7 @@ def get_latest_impostor_version(avatar_obj):
         version = package.get('impostorizer_version') if isinstance(package, dict) else getattr(package, 'impostorizer_version', None)
         if variant == 'impostor' and version and version != 'None':
             impostor_versions.append(version)
-    return impostor_versions[-1] if impostor_versions else 'unknown'
+    return max(impostor_versions, key=parse_version) if impostor_versions else 'unknown'
 
 def should_regenerate(avatar_obj, target_version):
     impostor_version = get_latest_impostor_version(avatar_obj)
@@ -82,6 +82,11 @@ def run(api_client, current_user, settingsdata):
 
     if not avatars_to_regenerate:
         console.print("[green]All avatars are up to date.[/green]")
+        return
+
+    confirm = console.input(f"Queue regeneration for {len(avatars_to_regenerate)} avatar(s)? (y/n): ").strip().lower()
+    if confirm != 'y':
+        console.print("[yellow]Cancelled.[/yellow]")
         return
 
     successful, failed = 0, 0
