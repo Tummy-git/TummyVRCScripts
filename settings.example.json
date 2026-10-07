@@ -17,5 +17,7 @@
     "allowvrcx": false,
     "vrcxfavgroup": "Favorites",
     "calendar_days_ahead": 30,
-    "visitors_world_id": ""
+    "visitors_world_id": "",
+    "platform_filter": "auto",
+    "friends_favorites_rescan_days": 7
 }

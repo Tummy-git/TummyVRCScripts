@@ -7,6 +7,7 @@ import webbrowser
 import random
 
 import vrchatapi
+import friends_favorites
 from vrcx_utils import add_favorite_world
 from json_utils import clean_for_json, load_json_list, save_json_list
 from vrchatapi import InstanceType, InstanceRegion, CreateInstanceRequest
@@ -37,9 +38,18 @@ INSTANCE_TYPE_ALIASES = {
 }
 LAUNCH_MODES = ('invite', 'launch', 'both')
 
-KEY_HINTS = ("[bold]Enter[/bold] next · [bold]#[/bold] jump to · [bold]type[/bold] · [bold]mode[/bold] · "
-             "[bold]update[/bold]/[bold]add[/bold]/[bold]remove[/bold]/[bold]clear[/bold] party · "
-             "[bold]fav[/bold] · [bold]help[/bold] · [bold]quit[/bold]")
+PLATFORM_SHORT = {'standalonewindows': 'PC', 'android': 'Q', 'ios': 'iOS'}
+# auto: worlds must support your platform and every party member's platform
+PLATFORM_FILTERS = {
+    'auto': "Your and the party's platforms",
+    'pc': "Must support PC",
+    'both': "Must support PC and Quest",
+    'off': "Show all worlds",
+}
+
+KEY_HINTS = ("[bold]Enter[/bold] next · [bold]#[/bold] jump · [bold]type[/bold] · [bold]mode[/bold] · "
+             "[bold]add[/bold]/[bold]remove[/bold]/[bold]update[/bold]/[bold]clear[/bold] · "
+             "[bold]platform[/bold] · [bold]open[/bold] · [bold]fav[/bold] · [bold]help[/bold] · [bold]quit[/bold]")
 HELP_ROWS = [
     ("Enter", "Jump to the next world"),
     ("<number>", "Jump to that world in the queue"),
@@ -49,6 +59,8 @@ HELP_ROWS = [
     ("add", "Add a party member by user ID"),
     ("remove", "Remove a party member by number"),
     ("clear", "Remove everyone from the party"),
+    ("platform <p>", "Skip worlds by platform: auto (yours + party), pc, both (PC and Quest), off"),
+    ("open", "Open the current world's page in your browser"),
     ("fav", "Add the world you're in to your VRCX favorites"),
     ("quit", "Exit. The session is kept so you can resume it"),
 ]
@@ -56,6 +68,31 @@ HELP_ROWS = [
 # Lines used outside the bottom panels: header (5), progress (1), hints (1), status (1), prompt (1), slack (1)
 RESERVED_LINES = 10
 MIN_PANEL_HEIGHT = 8
+
+def world_platforms(world):
+    return {p.get('platform') for p in (world.get('unity_packages') or []) if p.get('platform')}
+
+def platform_badge(platforms):
+    known = [PLATFORM_SHORT[p] for p in PLATFORM_SHORT if p in platforms]
+    return "+".join(known) if known else "?"
+
+def required_platforms(platform_filter, my_platform, co_explorers):
+    if platform_filter == 'off': return set()
+    if platform_filter == 'pc': return {'standalonewindows'}
+    if platform_filter == 'both': return {'standalonewindows', 'android'}
+    required = {my_platform} if my_platform in PLATFORM_SHORT else {'standalonewindows'}
+    return required | {e.get('platform') for e in co_explorers if e.get('platform') in PLATFORM_SHORT}
+
+def is_compatible(world, required):
+    # Worlds without platform info are kept rather than guessed at
+    platforms = world_platforms(world)
+    return not platforms or required <= platforms
+
+def next_compatible(json_list, start, required):
+    for i in range(start, len(json_list)):
+        if is_compatible(json_list[i], required):
+            return i
+    return len(json_list)
 
 def get_unity_version(data):
     world_data = data.get('world', data)
@@ -73,7 +110,7 @@ def get_instance_users(api_client, world_id, instance_id):
         instance = api_instance.get_instance(world_id, instance_id)
         if not hasattr(instance, 'users') or instance.users is None:
             return []
-        return [{'uid': user.id, 'name': user.display_name} for user in instance.users]
+        return [{'uid': user.id, 'name': user.display_name, 'platform': user.last_platform} for user in instance.users]
     except ApiException:
         return []
 
@@ -81,9 +118,20 @@ def get_user_by_id(api_client, user_id):
     try:
         api_users = vrchatapi.UsersApi(api_client)
         user = api_users.get_user(user_id)
-        return {'uid': user.id, 'name': user.display_name}
+        return {'uid': user.id, 'name': user.display_name, 'platform': user.last_platform}
     except ApiException:
         return None
+
+def refresh_party_platforms(api_client, co_explorers):
+    """Updates each party member's name and last used platform. Returns True if anything changed."""
+    changed = False
+    with console.status("[bold green]Checking party platforms..."):
+        for explorer in co_explorers:
+            info = get_user_by_id(api_client, explorer['uid'])
+            if info and (info['name'], info['platform']) != (explorer.get('name'), explorer.get('platform')):
+                explorer.update(info)
+                changed = True
+    return changed
 
 def get_current_presence_world_id(api_client):
     try:
@@ -105,7 +153,7 @@ def build_header(world, visited):
     if not world:
         return Panel("No worlds in the queue.", title="Current World", border_style="cyan", height=5)
     text = Text.assemble((world['name'], "bold green"), " by ", (world['author'], "bold cyan"),
-                         f"\nID: {world['id']}\nUnity: {world['unity']}", no_wrap=True, overflow="ellipsis")
+                         f"\nID: {world['id']}\nUnity: {world['unity']} · Platforms: {world['platforms']}", no_wrap=True, overflow="ellipsis")
     if visited:
         return Panel(text, title="Current World", border_style="cyan", height=5)
     return Panel(text, title="Up Next (press Enter to jump)", border_style="yellow", height=5)
@@ -119,10 +167,17 @@ def build_progress(done, total):
     grid.add_row(f"World {done} / {total}", ProgressBar(total=max(total, 1), completed=done), f"{percent:>3}%")
     return grid
 
-def build_coming_next(next_worlds, first_number, rows):
+def build_coming_next(next_worlds, first_number, rows, required):
     table = list_table()
+    table.add_column(no_wrap=True, justify="right")
     for i, w in enumerate(next_worlds[:rows]):
-        table.add_row(f"{first_number + i}.", Text.assemble(w.get('name') or 'Unknown', (f" by {w.get('author_name') or 'Unknown'}", "dim")))
+        name = Text.assemble(w.get('name') or 'Unknown', (f" by {w.get('author_name') or 'Unknown'}", "dim"))
+        badge = platform_badge(world_platforms(w))
+        if is_compatible(w, required):
+            table.add_row(f"{first_number + i}.", name, Text(badge, style="cyan"))
+        else:
+            name.stylize("dim strike")
+            table.add_row(f"{first_number + i}.", name, Text(f"skip {badge}", style="dim red"))
     if not next_worlds:
         table.add_row("", Text("End of queue", style="dim"))
     return table
@@ -134,12 +189,14 @@ def build_party(co_explorers, rows):
         return table
     shown = co_explorers if len(co_explorers) <= rows else co_explorers[:max(rows - 1, 0)]
     for i, explorer in enumerate(shown, 1):
-        table.add_row(str(i), Text(explorer.get('name') or explorer.get('uid', '?')))
+        badge = PLATFORM_SHORT.get(explorer.get('platform'), "?")
+        table.add_row(str(i), Text.assemble(explorer.get('name') or explorer.get('uid', '?'), (f"  {badge}", "cyan")))
     if len(shown) < len(co_explorers):
         table.add_row("", Text(f"...and {len(co_explorers) - len(shown)} more", style="dim"))
     return table
 
-def render_dashboard(json_list, active_idx, visited, current_world_info, instance_type, launch_mode, co_explorers, status_msg):
+def render_dashboard(json_list, active_idx, visited, current_world_info, instance_type, launch_mode, co_explorers, status_msg,
+                     platform_filter, required):
     type_name = INSTANCE_TYPE_NAMES.get(instance_type, str(instance_type))
     next_worlds = json_list[active_idx + 1:]
     done = active_idx + 1 if visited else active_idx
@@ -151,12 +208,14 @@ def render_dashboard(json_list, active_idx, visited, current_world_info, instanc
     main_grid.add_row(build_progress(done, len(json_list)))
 
     if bottom_height >= MIN_PANEL_HEIGHT:
-        next_panel = Panel(build_coming_next(next_worlds, active_idx + 2, bottom_height - 2),
+        next_panel = Panel(build_coming_next(next_worlds, active_idx + 2, bottom_height - 2, required),
                            title="Coming Next", border_style="blue", height=bottom_height)
 
-        settings_text = Text.assemble("Instance: ", (type_name, "bold"), "\nMode: ", (launch_mode.upper(), "bold"))
-        settings_panel = Panel(settings_text, title="Settings", border_style="yellow", height=4)
-        party_height = bottom_height - 4
+        platform_text = platform_filter + (f" ({platform_badge(required)})" if required else "")
+        settings_text = Text.assemble("Instance: ", (type_name, "bold"), "\nMode: ", (launch_mode.upper(), "bold"),
+                                      "\nPlatforms: ", (platform_text, "bold"))
+        settings_panel = Panel(settings_text, title="Settings", border_style="yellow", height=5)
+        party_height = bottom_height - 5
         party_panel = Panel(build_party(co_explorers, party_height - 2), title=f"Hopping Party ({len(co_explorers)})",
                             border_style="white", height=party_height)
 
@@ -221,6 +280,11 @@ def run(api_client, current_user, settingsdata):
     vrcx_db_path = settingsdata['files']['vrcx_db_path']
     vrcx_allowed = settingsdata['allowvrcx']
     vrcx_fav_group = settingsdata['vrcxfavgroup']
+    friends_favorites_path = friends_favorites.get_cache_path(settingsdata)
+    platform_filter = settingsdata.get('platform_filter', 'auto')
+    if platform_filter not in PLATFORM_FILTERS:
+        platform_filter = 'auto'
+    my_platform = getattr(current_user, 'last_platform', None)
 
     has_vrcplus = hasattr(current_user, 'tags') and current_user.tags and 'system_supporter' in current_user.tags
 
@@ -254,9 +318,10 @@ def run(api_client, current_user, settingsdata):
         queue_table.add_row("3", "Public (Recently Published)")
         queue_table.add_row("4", "Public (Hot / Popular)")
         queue_table.add_row("5", "Public (Random / Shuffle)")
+        queue_table.add_row("6", "Friends' favorites (most favorited first)")
 
         console.print(queue_table)
-        q_choice = console.input("Select a queue to load (1-5): ").strip()
+        q_choice = console.input("Select a queue to load (1-6): ").strip()
 
         if q_choice == '1':
             api_response, failed_ids = load_world_ids(api_world_instance, manual_world_list_path)
@@ -265,6 +330,12 @@ def run(api_client, current_user, settingsdata):
                 status_msg = f"[yellow]Skipped {len(failed_ids)} world ID(s) that couldn't be loaded: {escape(shown)}[/yellow]"
             if not api_response:
                 console.print("[yellow]No worlds could be loaded from the file. Falling back to Community Labs (Newest).[/yellow]")
+            use_api_search = not api_response
+        elif q_choice == '6':
+            api_response = friends_favorites.load_queue(friends_favorites_path)
+            if not api_response:
+                console.print("[yellow]No friends' favorites saved yet. Run 'Scrape Friends' Favorite Worlds' from the main menu first. "
+                              "Falling back to Community Labs (Newest).[/yellow]")
             use_api_search = not api_response
         else:
             use_api_search = True
@@ -287,6 +358,9 @@ def run(api_client, current_user, settingsdata):
             json.dump(clean_for_json(api_response), f, indent=2, ensure_ascii=False)
 
     co_explorers = load_json_list(worldhoppers_file_path)
+    # Platforms change when people switch devices, so check them at the start of every session
+    if co_explorers and refresh_party_platforms(api_client, co_explorers):
+        save_json_list(worldhoppers_file_path, co_explorers)
 
     with open(world_json_output_path, 'r', encoding='utf-8') as f:
         json_list = json.load(f)
@@ -298,8 +372,16 @@ def run(api_client, current_user, settingsdata):
     if not 0 <= activeJumpIndex < len(json_list):
         activeJumpIndex, visited_index = 0, None
     current_world_info = {}
+    skip_note = ""
 
     while True:
+        required = required_platforms(platform_filter, my_platform, co_explorers)
+        if visited_index != activeJumpIndex:
+            # Make sure the world shown as "Up Next" is one the filter allows
+            candidate = next_compatible(json_list, activeJumpIndex, required)
+            if candidate < len(json_list):
+                activeJumpIndex = candidate
+
         if 0 <= activeJumpIndex < len(json_list):
             cw_static = json_list[activeJumpIndex]
             if not current_world_info or current_world_info.get('id') != cw_static.get('id'):
@@ -307,11 +389,12 @@ def run(api_client, current_user, settingsdata):
                     'name': cw_static.get('name', 'Unknown'),
                     'author': cw_static.get('author_name', 'Unknown'),
                     'id': cw_static.get('id', 'Unknown'),
-                    'unity': get_unity_version(cw_static)
+                    'unity': get_unity_version(cw_static),
+                    'platforms': platform_badge(world_platforms(cw_static)),
                 }
 
         render_dashboard(json_list, activeJumpIndex, visited_index == activeJumpIndex, current_world_info,
-                         current_instance_type, action_mode, co_explorers, status_msg)
+                         current_instance_type, action_mode, co_explorers, status_msg, platform_filter, required)
         status_msg = ""
 
         user_input = console.input("[bold]>[/bold] ").strip()
@@ -345,6 +428,27 @@ def run(api_client, current_user, settingsdata):
                 status_msg = f"Mode set to {action_mode.upper()}."
             else:
                 status_msg = f"[red]Unknown mode '{escape(val)}'. Use invite, launch or both.[/red]"
+            continue
+
+        elif command.startswith('platform'):
+            val = command.replace('platform', '', 1).strip()
+            if not val:
+                options = ", ".join(f"{k} ({v})" for k, v in PLATFORM_FILTERS.items())
+                val = console.input(f"Platform filter - {options}: ").strip().lower()
+            if val in PLATFORM_FILTERS:
+                platform_filter = val
+                status_msg = f"Platform filter set to {val}: {PLATFORM_FILTERS[val]}."
+            else:
+                status_msg = f"[red]Unknown platform filter '{escape(val)}'. Use auto, pc, both or off.[/red]"
+            continue
+
+        elif command == 'open':
+            world_id = current_world_info.get('id')
+            if world_id:
+                webbrowser.open(f"https://vrchat.com/home/world/{world_id}")
+                status_msg = "Opened the world page in your browser."
+            else:
+                status_msg = "[red]No world selected.[/red]"
             continue
 
         elif command == 'update':
@@ -412,7 +516,10 @@ def run(api_client, current_user, settingsdata):
 
         elif user_input == "":
             # Retry the current world if the last jump to it failed, otherwise move on
-            target_index = activeJumpIndex + 1 if visited_index == activeJumpIndex else activeJumpIndex
+            start = activeJumpIndex + 1 if visited_index == activeJumpIndex else activeJumpIndex
+            target_index = next_compatible(json_list, start, required)
+            if target_index > start:
+                skip_note = f"Skipped {target_index - start} world(s) that don't support {platform_badge(required)}. "
             if target_index >= len(json_list):
                 save_session_index(settings_path, settingsdata, None)
                 break
@@ -429,6 +536,7 @@ def run(api_client, current_user, settingsdata):
 
         activeJumpIndex = target_index
         world_number = activeJumpIndex + 1
+        note, skip_note = skip_note, ""
         target_world_id = json_list[activeJumpIndex]['id']
 
         try:
@@ -484,7 +592,7 @@ def run(api_client, current_user, settingsdata):
                     if failed_invites:
                         result += f" [red]({failed_invites} failed)[/red]"
 
-                status_msg = f"[green]Jumped to world {world_number}.[/green] {result}"
+                status_msg = f"{note}[green]Jumped to world {world_number}.[/green] {result}"
                 visited_index = activeJumpIndex
                 save_session_index(settings_path, settingsdata, activeJumpIndex)
 

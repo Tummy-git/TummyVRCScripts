@@ -41,6 +41,7 @@ REGISTERED_TOOLS = [
     {"module": "export_calendar", "name": "Export Followed Events to iCal"},
     {"module": "groups_manager", "name": "Manage Followed Groups"},
     {"module": "world_visit_tracker", "name": "World Visit Tracker"},
+    {"module": "friends_favorites", "name": "Scrape Friends' Favorite Worlds"},
 ]
 
 def scramble(text):

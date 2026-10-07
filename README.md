@@ -24,6 +24,7 @@ python main.py --run world_visit_tracker
 python main.py --run world_hopper
 python main.py --run regenerate_impostors
 python main.py --run groups_manager
+python main.py --run friends_favorites
 ```
 
 `run.bat` and `run.sh` pass arguments along too, so `run.bat --run export_calendar` works as well.
@@ -37,6 +38,7 @@ Once authenticated, you'll see the main menu:
 - `[2]` - Export Followed Events to iCal
 - `[3]` - Manage Followed Groups
 - `[4]` - World Visit Tracker
+- `[5]` - Scrape Friends' Favorite Worlds
 - `[l]` - Logout (clears all stored credentials and cookies)
 - `[q]` - Quit the script
 
@@ -66,6 +68,13 @@ Keeps the list of groups the ICAL export fetches events from. It is stored in `g
 ### World Visit Tracker
 Logs the visit count of the world in `visitors_world_id` to `world_visits.log`, one line per run (`YYYY-MM-DD HH:MM:SS visits`). Meant to be run on a schedule with `--run world_visit_tracker`.
 
+### Scrape Friends' Favorite Worlds
+Goes through all your friends and collects the worlds in the favorite lists they share with you (lists set to Friends or Public). Every world is only listed once, together with which friends favorited it. It is stored in `friends_favorites.json` and used by queue option 6 in the World Hopper.
+
+- The first scan takes a while (roughly 2 seconds per friend) to go easy on the API. Press Ctrl+C to stop; progress is saved and the next run continues where it left off.
+- Friends scanned in the last `friends_favorites_rescan_days` days are skipped, so later runs only pick up new or outdated friends.
+- Private and deleted worlds are left out. Worlds from people you're no longer friends with are removed.
+
 ### Worldhopper
 
 #### Initial Setup
@@ -81,6 +90,7 @@ Select a queue to load (1-5):
 - **3** - Public (Recently Published)
 - **4** - Public (Hot / Popular)
 - **5** - Public (Random / Shuffle)
+- **6** - Friends' favorites: the worlds from Scrape Friends' Favorite Worlds, the ones most of your friends favorited first
 
 ```
 Enter offset (0-999):
@@ -117,6 +127,18 @@ There is a cooldown between jumps (`api_delay_seconds`). A countdown is shown wh
 - `remove` - Remove a user from your co-explorers list
 - `clear` - Clear your entire co-explorers list
 
+**Platforms:**
+Some worlds only work on PC, some only on Quest/Android. The hopper skips worlds that not everyone can join. Skipped worlds are shown crossed out in the Coming Next list.
+- `platform auto` - Worlds must support your platform and the platform of everyone in the party (default). Party platforms are checked when the hopper starts
+- `platform pc` - Worlds must support PC
+- `platform both` - Worlds must support PC and Quest
+- `platform off` - Don't skip anything
+
+Typing a number still jumps to that world, even if it would be skipped.
+
+**Other:**
+- `open` - Open the current world's page on vrchat.com in your browser
+
 **Favorites:**
 - `fav` - Add the current world you're in to VRCX favorites (requires VRCX integration enabled)
 
@@ -146,6 +168,9 @@ There is a cooldown between jumps (`api_delay_seconds`). A countdown is shown wh
 |"vrcxfavgroup"| "Favorites"|Name of the local VRCX world favorite list to use
 |"calendar_days_ahead"| 30|Limit calendar export to only events within the next N days. Set to `null` or `0` to show all events
 |"visitors_world_id"| ""|World ID (`wrld_...`) the world visit tracker logs visits for
+|"platform_filter"| "auto"|Starting platform filter in the world hopper: `auto`, `pc`, `both` or `off`
+|"friends_favorites_path"| "friends_favorites.json"|Where scraped friends' favorites are stored (optional, inside "files")
+|"friends_favorites_rescan_days"| 7|Friends scanned within this many days are skipped by the scraper
 
 All file paths are relative to the script folder, so it doesn't matter where you run it from.
 
