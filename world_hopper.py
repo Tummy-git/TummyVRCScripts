@@ -38,7 +38,8 @@ INSTANCE_TYPE_ALIASES = {
 }
 LAUNCH_MODES = ('invite', 'launch', 'both')
 
-PLATFORM_SHORT = {'standalonewindows': 'PC', 'android': 'Q', 'ios': 'iOS'}
+PLATFORM_NAMES = {'standalonewindows': 'PC', 'android': 'Quest', 'ios': 'iOS'}
+PLATFORM_LETTERS = {'standalonewindows': 'P', 'android': 'Q', 'ios': 'I'}
 # auto: worlds must support your platform and every party member's platform
 PLATFORM_FILTERS = {
     'auto': "Your and the party's platforms",
@@ -73,15 +74,20 @@ def world_platforms(world):
     return {p.get('platform') for p in (world.get('unity_packages') or []) if p.get('platform')}
 
 def platform_badge(platforms):
-    known = [PLATFORM_SHORT[p] for p in PLATFORM_SHORT if p in platforms]
-    return "+".join(known) if known else "?"
+    """Fixed-position letters (P Q I) so each platform lines up in its own column."""
+    if not platforms & PLATFORM_LETTERS.keys():
+        return "?"
+    return " ".join(letter if p in platforms else " " for p, letter in PLATFORM_LETTERS.items())
+
+def platform_names(platforms):
+    return ", ".join(name for p, name in PLATFORM_NAMES.items() if p in platforms) or "unknown"
 
 def required_platforms(platform_filter, my_platform, co_explorers):
     if platform_filter == 'off': return set()
     if platform_filter == 'pc': return {'standalonewindows'}
     if platform_filter == 'both': return {'standalonewindows', 'android'}
-    required = {my_platform} if my_platform in PLATFORM_SHORT else {'standalonewindows'}
-    return required | {e.get('platform') for e in co_explorers if e.get('platform') in PLATFORM_SHORT}
+    required = {my_platform} if my_platform in PLATFORM_NAMES else {'standalonewindows'}
+    return required | {e.get('platform') for e in co_explorers if e.get('platform') in PLATFORM_NAMES}
 
 def is_compatible(world, required):
     # Worlds without platform info are kept rather than guessed at
@@ -176,15 +182,17 @@ def build_progress(done, total):
 
 def build_coming_next(next_worlds, first_number, rows, required):
     table = list_table()
-    table.add_column(no_wrap=True, justify="right")
+    table.add_column(no_wrap=True)
+    # Left-aligned with a fixed width so the P, Q and I letters stay in their own columns
+    table.add_column(no_wrap=True, min_width=5)
     for i, w in enumerate(next_worlds[:rows]):
         name = Text.assemble(w.get('name') or 'Unknown', (f" by {w.get('author_name') or 'Unknown'}", "dim"))
         badge = platform_badge(world_platforms(w))
         if is_compatible(w, required):
-            table.add_row(f"{first_number + i}.", name, Text(badge, style="cyan"))
+            table.add_row(f"{first_number + i}.", name, "", Text(badge, style="cyan"))
         else:
             name.stylize("dim strike")
-            table.add_row(f"{first_number + i}.", name, Text(f"skip {badge}", style="dim red"))
+            table.add_row(f"{first_number + i}.", name, Text("skip", style="dim red"), Text(badge, style="dim red"))
     if not next_worlds:
         table.add_row("", Text("End of queue", style="dim"))
     return table
@@ -196,7 +204,7 @@ def build_party(co_explorers, rows):
         return table
     shown = co_explorers if len(co_explorers) <= rows else co_explorers[:max(rows - 1, 0)]
     for i, explorer in enumerate(shown, 1):
-        badge = PLATFORM_SHORT.get(explorer.get('platform'), "?")
+        badge = PLATFORM_LETTERS.get(explorer.get('platform'), "?")
         table.add_row(str(i), Text.assemble(explorer.get('name') or explorer.get('uid', '?'), (f"  {badge}", "cyan")))
     if len(shown) < len(co_explorers):
         table.add_row("", Text(f"...and {len(co_explorers) - len(shown)} more", style="dim"))
@@ -218,7 +226,7 @@ def render_dashboard(json_list, active_idx, visited, current_world_info, instanc
         next_panel = Panel(build_coming_next(next_worlds, active_idx + 2, bottom_height - 2, required),
                            title="Coming Next", border_style="blue", height=bottom_height)
 
-        platform_text = platform_filter + (f" ({platform_badge(required)})" if required else "")
+        platform_text = platform_filter + (f" ({platform_names(required)})" if required else "")
         settings_text = Text.assemble("Instance: ", (type_name, "bold"), "\nMode: ", (launch_mode.upper(), "bold"),
                                       "\nPlatforms: ", (platform_text, "bold"))
         settings_panel = Panel(settings_text, title="Settings", border_style="yellow", height=5)
@@ -397,7 +405,7 @@ def run(api_client, current_user, settingsdata):
                     'author': cw_static.get('author_name', 'Unknown'),
                     'id': cw_static.get('id', 'Unknown'),
                     'unity': get_unity_version(cw_static),
-                    'platforms': platform_badge(world_platforms(cw_static)),
+                    'platforms': platform_names(world_platforms(cw_static)),
                 }
 
         render_dashboard(json_list, activeJumpIndex, visited_index == activeJumpIndex, current_world_info,
@@ -526,7 +534,7 @@ def run(api_client, current_user, settingsdata):
             start = activeJumpIndex + 1 if visited_index == activeJumpIndex else activeJumpIndex
             target_index = next_compatible(json_list, start, required)
             if target_index > start:
-                skip_note = f"Skipped {target_index - start} world(s) that don't support {platform_badge(required)}. "
+                skip_note = f"Skipped {target_index - start} world(s) that don't support {platform_names(required)}. "
             if target_index >= len(json_list):
                 save_session_index(settings_path, settingsdata, None)
                 break
